@@ -1,0 +1,10 @@
+pandas
+numpy
+requests
+python-dotenv
+supabase
+openmeteo-requests
+retry-requests
+requests-cache
+sqlalchemy
+psycopg2-binary

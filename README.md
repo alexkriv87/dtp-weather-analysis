@@ -44,8 +44,6 @@ graph LR
     F --> G[Витрины VIEW]
     G --> H[Дашборды DataLens]
 
-
-
 ## Схема базы данных
 
 ```mermaid
@@ -116,4 +114,3 @@ erDiagram
         text role
         text condition
     }
-\```

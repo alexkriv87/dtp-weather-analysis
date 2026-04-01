@@ -31,3 +31,16 @@
 
 Автор: Алексей Кривошапкин  
 GitHub: [alexkriv87](https://github.com/alexkriv87)
+
+## Схема работы
+
+```mermaid
+graph LR
+    A[API ГИБДД] --> B[Буферные таблицы]
+    C[Open-Meteo] --> B
+    D[Яндекс.Геокодер] --> B
+    B --> E[Нормализация Python]
+    E --> F[Чистовые таблицы]
+    F --> G[Витрины VIEW]
+    G --> H[Дашборды DataLens]
+\```

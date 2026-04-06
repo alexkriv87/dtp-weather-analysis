@@ -10,11 +10,9 @@
 - **create_tables.sql** — схема базы данных
 - Инкрементальная загрузка — новые данные подтягиваются без дублирования
 
-## Дашборды
+## Дашборд
 
-- [Сезонность ДТП](https://datalens.ru/66mjf0cghfjkq)
-- [Погода и ДТП](https://datalens.ru/kl51lfmtults4)
-- [Опасные сочетания погоды](https://datalens.ru/abw84emzm8nwu)
+- https://datalens.yandex/jpc5yks9kjbe3
 
 ## Технологии
 

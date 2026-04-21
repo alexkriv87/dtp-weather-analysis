@@ -1,20 +1,20 @@
+"""
+Модуль для получения координат городов через Яндекс.Геокодер.
+
+1. Загружает из БД города, у которых ещё нет координат (latitude IS NULL).
+2. Для каждого города запрашивает координаты через API Яндекса.
+3. Обновляет поля latitude и longitude в таблице cities_buffer.
+"""
+
 import requests
 import time
 import os
 from dotenv import load_dotenv
 from logger_config import setup_logging
-from supabase import create_client, Client
+from db import read_sql, execute_sql
 
 logger = setup_logging()
 load_dotenv()
-
-# ============================================
-# ПОДКЛЮЧЕНИЕ К SUPABASE
-# ============================================
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ============================================
 # ЯНДЕКС ГЕОКОДЕР
@@ -26,15 +26,8 @@ YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 def fetch_coordinates(city_name: str, region_name: str) -> tuple:
     """
     Получение географических координат города через API Яндекс.Геокодера.
-
-    Args:
-        city_name: Наименование населенного пункта
-        region_name: Наименование региона
-
-    Returns:
-        Кортеж (широта, долгота) или (None, None) в случае ошибки
+    Возвращает (широта, долгота) или (None, None) в случае ошибки.
     """
-
     search_query = f"{city_name}, {region_name}, Россия"
 
     try:
@@ -51,12 +44,9 @@ def fetch_coordinates(city_name: str, region_name: str) -> tuple:
 
         if response.status_code == 200:
             data = response.json()
-
-            # Проверка наличия результатов поиска
             found = data['response']['GeoObjectCollection']['metaDataProperty']['GeocoderResponseMetaData']['found']
 
             if int(found) > 0:
-                # Извлечение координат первого найденного объекта
                 coordinates = data['response']['GeoObjectCollection']['featureMember'][0]['GeoObject']['Point']['pos']
                 longitude, latitude = coordinates.split()
                 return float(latitude), float(longitude)
@@ -74,35 +64,19 @@ def fetch_coordinates(city_name: str, region_name: str) -> tuple:
         return None, None
 
 # ============================================
-# ПОЛУЧЕНИЕ ГОРОДОВ БЕЗ КООРДИНАТ
+# ЗАГРУЗКА ГОРОДОВ БЕЗ КООРДИНАТ
 # ============================================
 
 
-all_cities = []
-start = 0
-step = 1000
+logger.info("Загружаем города без координат из БД")
+df_cities = read_sql(
+    "SELECT id, city, region FROM cities_buffer WHERE latitude IS NULL")
 
-# Загружаем пачками по 1000 записей (ограничение Supabase)
-while True:
-    result = supabase.table('cities_buffer')\
-        .select('id, city, region')\
-        .is_('latitude', 'null')\
-        .range(start, start + step - 1)\
-        .execute()
-
-    # Выходим из цикла, когда данные закончились
-    if not result.data:
-        break
-
-    all_cities.extend(result.data)
-    start += step
-    logger.info(f"Загружено {len(all_cities)} городов без координат")
-
-if not all_cities:
+if df_cities.empty:
     logger.info("Города без координат отсутствуют")
     exit()
 
-logger.info(f"Всего найдено городов без координат: {len(all_cities)}")
+logger.info(f"Всего найдено городов без координат: {len(df_cities)}")
 
 # ============================================
 # ОСНОВНОЙ ЦИКЛ ОБРАБОТКИ
@@ -111,36 +85,33 @@ logger.info(f"Всего найдено городов без координат
 successful = 0
 failed = 0
 
-for index, city in enumerate(all_cities, 1):
-    city_id = city['id']
-    city_name = city['city']
-    region = city['region']
+for index, row in df_cities.iterrows():
+    city_id = row['id']
+    city_name = row['city']
+    region = row['region']
 
-    logger.info(f"[{index}/{len(all_cities)}] {city_name} ({region})")
+    logger.info(f"[{index+1}/{len(df_cities)}] {city_name} ({region})")
 
     latitude, longitude = fetch_coordinates(city_name, region)
 
     if latitude and longitude:
-        update_result = supabase.table('cities_buffer')\
-            .update({'latitude': str(latitude), 'longitude': str(longitude)})\
-            .eq('id', city_id)\
-            .execute()
-
-        if update_result.data:
+        query = f"UPDATE cities_buffer SET latitude = '{latitude}', longitude = '{longitude}' WHERE id = {city_id}"
+        try:
+            execute_sql(query)
             successful += 1
             logger.info(f"  + {latitude}, {longitude}")
-        else:
+        except Exception as e:
             failed += 1
-            logger.error(f"  ошибка БД")
+            logger.error(f"  Ошибка БД при обновлении: {e}")
     else:
         failed += 1
-        logger.warning(f"  не найдено")
+        logger.warning(f"  Координаты не найдены")
 
-    time.sleep(0.3)
+    time.sleep(0.5)
 
 # ============================================
 # ИТОГОВАЯ СТАТИСТИКА
 # ============================================
 
 logger.info(
-    f"Геокодирование завершено. Всего: {len(all_cities)}, успешно: {successful}, ошибок: {failed}, не найдено: {failed}")
+    f"Геокодирование завершено. Всего: {len(df_cities)}, успешно: {successful}, ошибок: {failed}")

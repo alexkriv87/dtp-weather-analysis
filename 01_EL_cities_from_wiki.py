@@ -1,64 +1,45 @@
+
+
+"""
+Модуль для загрузки городов из Википедии в таблицу cities_buffer.
+
+1. Парсит страницу «Список городов России».
+2. Загружает из БД уже существующие города.
+3. Находит новые города (которых ещё нет в БД).
+4. Добавляет новые города в cities_buffer одной вставкой.
+"""
+
 import requests
 import pandas as pd
 import warnings
 from logger_config import setup_logging
-import os
-from dotenv import load_dotenv
-from supabase import create_client, Client
+from db import read_sql, df_to_sql
 
 warnings.filterwarnings('ignore')
 logger = setup_logging()
-load_dotenv()
 
 # ============================================
-# ПОДКЛЮЧЕНИЕ К SUPABASE
+# 1. ЗАГРУЖАЕМ СУЩЕСТВУЮЩИЕ ГОРОДА ИЗ БД
 # ============================================
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+logger.info("Загружаем существующие города из БД")
+df_existing = read_sql("SELECT city, region FROM cities_buffer")
 
-# ============================================
-# 1. ПОЛУЧАЕМ ВСЕ ГОРОДА ИЗ БАЗЫ
-# ============================================
+existing_keys = set()
+for _, row in df_existing.iterrows():
+    city_key = f"{row['city']};{row['region']}"
+    existing_keys.add(city_key)
 
-all_cities = []
-start = 0
-step = 1000
-
-# Загружаем пачками по 1000 записей (ограничение Supabase)
-while True:
-    result = supabase.table('cities_buffer')\
-        .select('city, region')\
-        .range(start, start + step - 1)\
-        .execute()
-
-    # Выходим из цикла, когда данные закончились
-    if not result.data:
-        break
-
-    # Создаем ключ "Город;Регион" для каждого города
-    # Это позволяет различать города с одинаковыми названиями из разных регионов
-    for record in result.data:
-        city_key = f"{record['city']};{record['region']}"
-        all_cities.append(city_key)
-
-    start += step
-
-# Создаем множество существующих городов
-# Добавляем варианты с "не призн." в названии, так как в Википедии
-# есть города с "не призн." в названии
-normal_cities = all_cities
-
+# Добавляем варианты с "не призн." (для городов из Википедии с такой пометкой)
 ne_cities = []
-for city in all_cities:
-    city_name, region = city.split(';')
+for key in existing_keys:
+    city_name, region = key.split(';')
     city_ne = f"{city_name}не призн.;{region}"
     ne_cities.append(city_ne)
 
-existing = set(normal_cities + ne_cities)
+existing_keys.update(ne_cities)
 
-logger.info(f"Загружено из базы: {len(all_cities)} городов")
+logger.info(f"Загружено из БД: {len(df_existing)} городов")
 
 # ============================================
 # 2. ПАРСИНГ ВИКИПЕДИИ
@@ -71,7 +52,6 @@ params = {
     'prop': 'text',
     'contentmodel': 'wikitext'
 }
-
 headers = {'User-Agent': 'StudentProject/1.0 (alex.kriv87@gmail.com)'}
 
 logger.info("Парсинг Википедии...")
@@ -82,35 +62,29 @@ if response.status_code != 200:
     logger.error(f"Ошибка запроса: {response.status_code}")
     exit()
 
-# Извлекаем таблицу с городами из ответа Википедии
 data = response.json()
 tables = pd.read_html(data['parse']['text']['*'])
 cities_table = tables[0]
 
-# Присваиваем колонкам понятные названия
+# Приводим таблицу к нужному формату
 column_names = ['num', 'sign', 'city', 'region', 'federal',
                 'population', 'founded_or_first_mentioned', 'status', 'old_names']
-
 df_wiki = pd.DataFrame(cities_table.values, columns=column_names)
 df_wiki = df_wiki.drop(columns=['sign'])
 
-# Добавляем пустые колонки для координат
-df_wiki['latitude'] = None
-df_wiki['longitude'] = None
-
-# Создаем множество ключей из данных Википедии (без изменений)
+# Создаём множество ключей из Википедии (город;регион)
 wiki_keys = set()
-for idx, row in df_wiki.iterrows():
+for _, row in df_wiki.iterrows():
     city_key = f"{row['city']};{row['region']}"
     wiki_keys.add(city_key)
 
-logger.info(f"В Википедии {len(wiki_keys)} городов (с учетом регионов)")
+logger.info(f"В Википедии {len(wiki_keys)} городов (с учётом регионов)")
 
 # ============================================
 # 3. НАХОДИМ НОВЫЕ ГОРОДА
 # ============================================
 
-new_cities_keys = wiki_keys - existing
+new_cities_keys = wiki_keys - existing_keys
 
 if not new_cities_keys:
     logger.info("Новых городов нет")
@@ -119,65 +93,36 @@ if not new_cities_keys:
 logger.info(f"Найдено {len(new_cities_keys)} новых городов")
 
 # ============================================
-# 4. ЗАГРУЗКА НОВЫХ ГОРОДОВ В БАЗУ
+# 4. ПОДГОТОВКА DATAFRAME ДЛЯ ВСТАВКИ
 # ============================================
 
-# Создаем пустой список для хранения данных новых городов
 new_cities_list = []
-
-# Перебираем все ключи новых городов (например "Алуштане призн.;Крым")
 for key in new_cities_keys:
-    # Разделяем ключ на город и регион
     city, region = key.split(';')
-
-    # Ищем в DataFrame Википедии строку, где город и регион совпадают с нашим ключом
     matching_rows = df_wiki[(df_wiki['city'] == city)
                             & (df_wiki['region'] == region)]
-
-    # Если нашли хотя бы одну строку - добавляем её в список
     if len(matching_rows) > 0:
         row = matching_rows.iloc[0].copy()
         new_cities_list.append(row)
 
-# Преобразуем список новых городов в DataFrame
 df_new = pd.DataFrame(new_cities_list)
 
-# Теперь чистим названия городов от пометки "не призн."
+# Очищаем названия от пометки "не призн."
 df_new['city'] = df_new['city'].str.replace('не призн.', '', regex=False)
 
-# Список колонок, которые нужно загрузить в базу данных
-columns = ['city', 'region', 'federal', 'population',
-           'founded_or_first_mentioned', 'status', 'old_names']
+# Оставляем только нужные колонки (порядок как в таблице cities_buffer)
+columns_to_insert = ['city', 'region', 'federal', 'population',
+                     'founded_or_first_mentioned', 'status', 'old_names']
+df_to_insert = df_new[columns_to_insert].copy()
+df_to_insert['latitude'] = None
+df_to_insert['longitude'] = None
 
-# Перебираем все строки в DataFrame с новыми городами
-for idx, row in df_new.iterrows():
-    try:
-        # Преобразуем строку в словарь, беря только нужные колонки
-        city_data = row[columns].to_dict()
+# ============================================
+# 5. ВСТАВКА НОВЫХ ГОРОДОВ В БД
+# ============================================
 
-        # Заменяем NaN на None (JSON не понимает nan)
-        for key, value in city_data.items():
-            if pd.isna(value):
-                city_data[key] = None
-
-        # Добавляем пустые поля для координат
-        city_data['latitude'] = None
-        city_data['longitude'] = None
-
-        # Вставляем данные в таблицу cities_buffer
-        result = supabase.table('cities_buffer').insert(city_data).execute()
-
-        # Проверяем результат вставки
-        if result.data:
-            logger.info(f"Город {row['city']} ({row['region']}) сохранен")
-        else:
-            logger.error(f"Город {row['city']} не сохранен")
-
-    except Exception as e:
-        logger.error(f"Город {row['city']}: {e}")
-
-# Итоговое сообщение о количестве загруженных городов
-logger.info(f"Загрузка завершена. Добавлено {len(df_new)} новых городов")
-
-# Сохраняем резервную копию всех данных из Википедии
-df_wiki.to_csv('cities_backup.csv', index=False, encoding='utf-8-sig', sep=';')
+try:
+    df_to_sql(df_to_insert, 'cities_buffer', if_exists='append')
+    logger.info(f"Успешно добавлено {len(df_to_insert)} новых городов")
+except Exception as e:
+    logger.error(f"Ошибка при вставке городов: {e}")

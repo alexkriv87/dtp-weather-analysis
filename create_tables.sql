@@ -202,6 +202,20 @@ create table public.gibdd_participants_other (
   constraint gibdd_participants_other_dtp_id_fkey foreign KEY (dtp_id) references gibdd_dtp_main (id) on delete CASCADE
 ) TABLESPACE pg_default;
 
+CREATE TABLE gibdd_codes_buffer (
+    id SERIAL PRIMARY KEY,
+    city TEXT,
+    gibdd_region_id TEXT,
+    gibdd_codes TEXT,
+    path TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_gibdd_codes_buffer_city ON gibdd_codes_buffer (city);
+
+
+
+
  SELECT w.time_local AS "Время",
     EXTRACT(year FROM w.time_local)::integer AS "Год",
     EXTRACT(hour FROM w.time_local)::integer AS "Час",
@@ -331,4 +345,3 @@ create table public.gibdd_participants_other (
         END)
  HAVING count(DISTINCT gdm.id) > 1500
   ORDER BY (round(count(DISTINCT gdm.id)::numeric / count(*)::numeric, 3)) DESC;
-

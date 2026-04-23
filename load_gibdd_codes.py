@@ -1,10 +1,9 @@
 """
-Модуль для загрузки кодов ГИБДД и геометрии в таблицу gibdd_codes_buffer.
+ОДНОРАЗОВЫЙ СКРИПТ: Загружает регионы и муниципалитеты с геометрией из API ГИБДД.
 
-1. Получает список регионов из API ГИБДД.
-2. Для каждого региона получает список муниципалитетов (районов, городов).
-3. Сохраняет данные в gibdd_codes_buffer: название, код региона, код муниципалитета, геометрию.
-Скрипт одноразовый, не включается в main.py.
+Сохраняет:
+- gibdd_regions (id, name, path) — регионы РФ
+- gibdd_municipalities (region_id, region_name, municipality_id, municipality_name, path) — районы/города
 """
 
 import requests
@@ -19,17 +18,11 @@ logger = setup_logging()
 engine = get_engine()
 
 
-def get_regions():
+def get_regions(year, month):
     """
     Получает список регионов из API ГИБДД.
-    Возвращает список словарей с id и name.
+    Возвращает список словарей с id, name, path.
     """
-    now = datetime.now()
-    year = now.year
-    month = now.month - 1 if now.month > 1 else 12
-    if month == 12:
-        year -= 1
-
     payload = {
         "maptype": 1,
         "region": "877",
@@ -62,7 +55,7 @@ def get_regions():
 
 def get_districts(region_id, region_name, year, month):
     """
-    Получает список муниципалитетов для региона.
+    Получает список муниципалитетов для региона из API ГИБДД.
     Возвращает список словарей с id, name, path.
     """
     payload = {
@@ -101,7 +94,7 @@ def get_districts(region_id, region_name, year, month):
 
 def main():
     logger.info("=" * 60)
-    logger.info("ЗАГРУЗКА КОДОВ ГИБДД В ТАБЛИЦУ gibdd_codes_buffer")
+    logger.info("ЗАГРУЗКА РЕГИОНОВ И МУНИЦИПАЛИТЕТОВ ИЗ API ГИБДД")
     logger.info("=" * 60)
 
     # Определяем год и месяц для API (всегда предыдущий месяц)
@@ -112,22 +105,45 @@ def main():
         year -= 1
     logger.info(f"Используем данные за {month}.{year}")
 
-    # Получаем список регионов
-    regions = get_regions()
+    # ============================================
+    # 1. ЗАГРУЖАЕМ И СОХРАНЯЕМ РЕГИОНЫ
+    # ============================================
+
+    regions = get_regions(year, month)
     if not regions:
-        logger.error("Не удалось получить список регионов. Скрипт остановлен.")
+        logger.error("Не удалось получить список регионов")
         return
 
-    all_records = []
+    # Сохраняем регионы в БД
+    regions_records = []
+    for region in regions:
+        regions_records.append({
+            'region_id': region['id'],
+            'region_name': region['name'],
+            'path': region.get('path')
+        })
 
-    # Обрабатываем каждый регион
+    df_regions = pd.DataFrame(regions_records)
+    try:
+        df_to_sql(df_regions, 'gibdd_regions',
+                  if_exists='append', chunksize=500)
+        logger.info(f"Загружено {len(df_regions)} регионов в gibdd_regions")
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке регионов: {e}")
+        return
+
+    # ============================================
+    # 2. ЗАГРУЖАЕМ И СОХРАНЯЕМ МУНИЦИПАЛИТЕТЫ
+    # ============================================
+
+    municipalities_records = []
+
     for i, region in enumerate(regions, 1):
         region_id = region['id']
         region_name = region['name']
         logger.info(
             f"[{i}/{len(regions)}] Регион: {region_name} (id: {region_id})")
 
-        # Получаем муниципалитеты региона
         districts = get_districts(region_id, region_name, year, month)
 
         if not districts:
@@ -136,30 +152,28 @@ def main():
 
         logger.info(f"  Найдено муниципалитетов: {len(districts)}")
 
-        # Формируем записи для вставки
         for district in districts:
-            all_records.append({
-                'city': district['name'],
-                'gibdd_region_id': region_id,
-                'gibdd_codes': district['id'],
-                'path': district.get('path', None)
+            municipalities_records.append({
+                'region_id': region_id,
+                'region_name': region_name,
+                'municipality_id': district['id'],
+                'municipality_name': district['name'],
+                'path': district.get('path')
             })
 
-        # Пауза между регионами, чтобы не перегружать API
-        time.sleep(0.5)
+        time.sleep(0.5)  # Пауза между регионами, чтобы не перегружать API
 
-    # Сохраняем все записи в БД одной вставкой
-    if all_records:
-        df = pd.DataFrame(all_records)
-        logger.info(f"Всего записей для вставки: {len(df)}")
+    if municipalities_records:
+        df_municipalities = pd.DataFrame(municipalities_records)
         try:
-            df_to_sql(df, 'gibdd_codes_buffer',
+            df_to_sql(df_municipalities, 'gibdd_municipalities',
                       if_exists='append', chunksize=500)
-            logger.info("Данные успешно загружены в gibdd_codes_buffer")
+            logger.info(
+                f"Загружено {len(df_municipalities)} муниципалитетов в gibdd_municipalities")
         except Exception as e:
-            logger.error(f"Ошибка при вставке данных: {e}")
+            logger.error(f"Ошибка при загрузке муниципалитетов: {e}")
     else:
-        logger.warning("Нет данных для загрузки")
+        logger.warning("Нет данных для загрузки муниципалитетов")
 
 
 if __name__ == "__main__":

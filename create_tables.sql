@@ -54,17 +54,15 @@ CREATE TABLE gibdd_regions (
 -- Таблица для муниципалитетов (с геометрией и привязкой к региону)
 CREATE TABLE gibdd_municipalities (
     id SERIAL PRIMARY KEY,
-    region_id TEXT NOT NULL,
-    region_name TEXT NOT NULL,
-    municipality_id TEXT NOT NULL,
-    municipality_name TEXT NOT NULL,
+    gibdd_region_id TEXT,
+    region_name TEXT,
+    municipality_id TEXT,
+    municipality_name TEXT,
     path TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Индекс для быстрого поиска по названию муниципалитета (пригодится при обновлении cities_clean)
 CREATE INDEX idx_gibdd_municipalities_name ON gibdd_municipalities (municipality_name);
-);
 
 -- Индекс для быстрого поиска по составному ключу (город + регион)
 CREATE INDEX idx_gibdd_codes_buffer_city_region ON gibdd_codes_buffer (city, region_name);

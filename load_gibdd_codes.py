@@ -2,8 +2,8 @@
 ОДНОРАЗОВЫЙ СКРИПТ: Загружает регионы и муниципалитеты с геометрией из API ГИБДД.
 
 Сохраняет:
-- gibdd_regions (id, name, path) — регионы РФ
-- gibdd_municipalities (region_id, region_name, municipality_id, municipality_name, path) — районы/города
+- gibdd_regions (region_id, region_name, path) — регионы РФ
+- gibdd_municipalities (gibdd_region_id, region_name, municipality_id, municipality_name, path) — районы/города
 """
 
 import requests
@@ -154,14 +154,14 @@ def main():
 
         for district in districts:
             municipalities_records.append({
-                'region_id': region_id,
+                'gibdd_region_id': region_id,      # ← изменено с region_id на gibdd_region_id
                 'region_name': region_name,
                 'municipality_id': district['id'],
                 'municipality_name': district['name'],
                 'path': district.get('path')
             })
 
-        time.sleep(0.5)  # Пауза между регионами, чтобы не перегружать API
+        time.sleep(0.5)
 
     if municipalities_records:
         df_municipalities = pd.DataFrame(municipalities_records)

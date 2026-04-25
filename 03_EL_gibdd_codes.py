@@ -1,3 +1,4 @@
+# 03_EL_gibdd_codes.py
 """
 ИНКРЕМЕНТАЛЬНАЯ ЗАГРУЗКА РЕГИОНОВ И МУНИЦИПАЛИТЕТОВ ИЗ API ГИБДД.
 
@@ -95,7 +96,8 @@ def get_districts(region_id, region_name, year, month):
 
 def main():
     logger.info("=" * 60)
-    logger.info("ИНКРЕМЕНТАЛЬНАЯ ЗАГРУЗКА РЕГИОНОВ И МУНИЦИПАЛИТЕТОВ ИЗ API ГИБДД")
+    logger.info(
+        "ИНКРЕМЕНТАЛЬНАЯ ЗАГРУЗКА РЕГИОНОВ И МУНИЦИПАЛИТЕТОВ ИЗ API ГИБДД")
     logger.info("=" * 60)
 
     # Определяем год и месяц для API (всегда предыдущий месяц)
@@ -137,15 +139,19 @@ def main():
         how='left',
         indicator=True
     )
-    new_regions = df_merged[df_merged['_merge'] == 'left_only'].drop(columns=['_merge'])
+    new_regions = df_merged[df_merged['_merge']
+                            == 'left_only'].drop(columns=['_merge'])
 
     logger.info(f"Из них новых для вставки: {len(new_regions)}")
-    logger.info(f"Пропущено (уже есть в БД): {len(df_regions) - len(new_regions)}")
+    logger.info(
+        f"Пропущено (уже есть в БД): {len(df_regions) - len(new_regions)}")
 
     if not new_regions.empty:
         try:
-            df_to_sql(new_regions, 'gibdd_regions', if_exists='append', chunksize=500)
-            logger.info(f"Загружено {len(new_regions)} новых регионов в gibdd_regions")
+            df_to_sql(new_regions, 'gibdd_regions',
+                      if_exists='append', chunksize=500)
+            logger.info(
+                f"Загружено {len(new_regions)} новых регионов в gibdd_regions")
         except Exception as e:
             logger.error(f"Ошибка при загрузке регионов: {e}")
             return
@@ -157,7 +163,8 @@ def main():
     # ============================================
 
     # Загружаем существующие ключи из БД
-    df_db_codes = read_sql("SELECT gibdd_region_id, municipality_id FROM gibdd_municipalities")
+    df_db_codes = read_sql(
+        "SELECT gibdd_region_id, municipality_id FROM gibdd_municipalities")
     logger.info(f"Загружено существующих записей в БД: {len(df_db_codes)}")
 
     # Получаем свежие данные из API
@@ -200,15 +207,19 @@ def main():
         how='left',
         indicator=True
     )
-    new_municipalities = df_merged[df_merged['_merge'] == 'left_only'].drop(columns=['_merge'])
+    new_municipalities = df_merged[df_merged['_merge'] == 'left_only'].drop(columns=[
+                                                                            '_merge'])
 
     logger.info(f"Из них новых для вставки: {len(new_municipalities)}")
-    logger.info(f"Пропущено (уже есть в БД): {len(df_api_codes) - len(new_municipalities)}")
+    logger.info(
+        f"Пропущено (уже есть в БД): {len(df_api_codes) - len(new_municipalities)}")
 
     if not new_municipalities.empty:
         try:
-            df_to_sql(new_municipalities, 'gibdd_municipalities', if_exists='append', chunksize=500)
-            logger.info(f"Загружено {len(new_municipalities)} новых муниципалитетов в gibdd_municipalities")
+            df_to_sql(new_municipalities, 'gibdd_municipalities',
+                      if_exists='append', chunksize=500)
+            logger.info(
+                f"Загружено {len(new_municipalities)} новых муниципалитетов в gibdd_municipalities")
         except Exception as e:
             logger.error(f"Ошибка при загрузке муниципалитетов: {e}")
     else:

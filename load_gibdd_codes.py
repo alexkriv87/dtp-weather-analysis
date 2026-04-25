@@ -1,9 +1,10 @@
 """
-ОДНОРАЗОВЫЙ СКРИПТ: Загружает регионы и муниципалитеты с геометрией из API ГИБДД.
+ИНКРЕМЕНТАЛЬНАЯ ЗАГРУЗКА РЕГИОНОВ И МУНИЦИПАЛИТЕТОВ ИЗ API ГИБДД.
 
 Сохраняет:
-- gibdd_regions (region_id, region_name, path) — регионы РФ
-- gibdd_municipalities (gibdd_region_id, region_name, municipality_id, municipality_name, path) — районы/города
+- gibdd_regions (region_id, region_name, path) — регионы РФ (только новые)
+- gibdd_municipalities (gibdd_region_id, region_name, municipality_id, municipality_name, path) — районы/города (только новые)
+Скрипт можно запускать регулярно — дубликаты не создаются.
 """
 
 import requests
@@ -11,7 +12,7 @@ import json
 import time
 from datetime import datetime
 from logger_config import setup_logging
-from db import df_to_sql, get_engine
+from db import df_to_sql, read_sql, execute_sql, get_engine
 import pandas as pd
 
 logger = setup_logging()
@@ -94,7 +95,7 @@ def get_districts(region_id, region_name, year, month):
 
 def main():
     logger.info("=" * 60)
-    logger.info("ЗАГРУЗКА РЕГИОНОВ И МУНИЦИПАЛИТЕТОВ ИЗ API ГИБДД")
+    logger.info("ИНКРЕМЕНТАЛЬНАЯ ЗАГРУЗКА РЕГИОНОВ И МУНИЦИПАЛИТЕТОВ ИЗ API ГИБДД")
     logger.info("=" * 60)
 
     # Определяем год и месяц для API (всегда предыдущий месяц)
@@ -106,7 +107,7 @@ def main():
     logger.info(f"Используем данные за {month}.{year}")
 
     # ============================================
-    # 1. ЗАГРУЖАЕМ И СОХРАНЯЕМ РЕГИОНЫ
+    # 1. ЗАГРУЖАЕМ И СОХРАНЯЕМ РЕГИОНЫ (инкрементально)
     # ============================================
 
     regions = get_regions(year, month)
@@ -114,35 +115,57 @@ def main():
         logger.error("Не удалось получить список регионов")
         return
 
-    # Сохраняем регионы в БД
-    regions_records = []
-    for region in regions:
-        regions_records.append({
-            'region_id': region['id'],
-            'region_name': region['name'],
-            'path': region.get('path')
+    # Формируем список записей для DataFrame
+    records = []
+    for r in regions:
+        records.append({
+            'region_id': r['id'],
+            'region_name': r['name'],
+            'path': r.get('path')
         })
+    df_regions = pd.DataFrame(records)
 
-    df_regions = pd.DataFrame(regions_records)
-    try:
-        df_to_sql(df_regions, 'gibdd_regions',
-                  if_exists='append', chunksize=500)
-        logger.info(f"Загружено {len(df_regions)} регионов в gibdd_regions")
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке регионов: {e}")
-        return
+    logger.info(f"Всего получено из API: {len(df_regions)} регионов")
+
+    # Загружаем существующие region_id из БД
+    df_db_regions = read_sql("SELECT region_id FROM gibdd_regions")
+
+    # Находим новые регионы через merge
+    df_merged = df_regions.merge(
+        df_db_regions[['region_id']],
+        on='region_id',
+        how='left',
+        indicator=True
+    )
+    new_regions = df_merged[df_merged['_merge'] == 'left_only'].drop(columns=['_merge'])
+
+    logger.info(f"Из них новых для вставки: {len(new_regions)}")
+    logger.info(f"Пропущено (уже есть в БД): {len(df_regions) - len(new_regions)}")
+
+    if not new_regions.empty:
+        try:
+            df_to_sql(new_regions, 'gibdd_regions', if_exists='append', chunksize=500)
+            logger.info(f"Загружено {len(new_regions)} новых регионов в gibdd_regions")
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке регионов: {e}")
+            return
+    else:
+        logger.info("Новых регионов нет")
 
     # ============================================
-    # 2. ЗАГРУЖАЕМ И СОХРАНЯЕМ МУНИЦИПАЛИТЕТЫ
+    # 2. ЗАГРУЖАЕМ И СОХРАНЯЕМ МУНИЦИПАЛИТЕТЫ (инкрементально)
     # ============================================
 
+    # Загружаем существующие ключи из БД
+    df_db_codes = read_sql("SELECT gibdd_region_id, municipality_id FROM gibdd_municipalities")
+    logger.info(f"Загружено существующих записей в БД: {len(df_db_codes)}")
+
+    # Получаем свежие данные из API
     municipalities_records = []
-
-    for i, region in enumerate(regions, 1):
+    for region in regions:
         region_id = region['id']
         region_name = region['name']
-        logger.info(
-            f"[{i}/{len(regions)}] Регион: {region_name} (id: {region_id})")
+        logger.info(f"Обработка региона: {region_name} (id: {region_id})")
 
         districts = get_districts(region_id, region_name, year, month)
 
@@ -154,7 +177,7 @@ def main():
 
         for district in districts:
             municipalities_records.append({
-                'gibdd_region_id': region_id,      # ← изменено с region_id на gibdd_region_id
+                'gibdd_region_id': region_id,
                 'region_name': region_name,
                 'municipality_id': district['id'],
                 'municipality_name': district['name'],
@@ -163,18 +186,39 @@ def main():
 
         time.sleep(0.5)
 
-    if municipalities_records:
-        df_municipalities = pd.DataFrame(municipalities_records)
+    if not municipalities_records:
+        logger.warning("Нет данных для загрузки муниципалитетов")
+        return
+
+    df_api_codes = pd.DataFrame(municipalities_records)
+    logger.info(f"Всего получено из API: {len(df_api_codes)} муниципалитетов")
+
+    # Находим новые муниципалитеты через merge
+    df_merged = df_api_codes.merge(
+        df_db_codes[['gibdd_region_id', 'municipality_id']],
+        on=['gibdd_region_id', 'municipality_id'],
+        how='left',
+        indicator=True
+    )
+    new_municipalities = df_merged[df_merged['_merge'] == 'left_only'].drop(columns=['_merge'])
+
+    logger.info(f"Из них новых для вставки: {len(new_municipalities)}")
+    logger.info(f"Пропущено (уже есть в БД): {len(df_api_codes) - len(new_municipalities)}")
+
+    if not new_municipalities.empty:
         try:
-            df_to_sql(df_municipalities, 'gibdd_municipalities',
-                      if_exists='append', chunksize=500)
-            logger.info(
-                f"Загружено {len(df_municipalities)} муниципалитетов в gibdd_municipalities")
+            df_to_sql(new_municipalities, 'gibdd_municipalities', if_exists='append', chunksize=500)
+            logger.info(f"Загружено {len(new_municipalities)} новых муниципалитетов в gibdd_municipalities")
         except Exception as e:
             logger.error(f"Ошибка при загрузке муниципалитетов: {e}")
     else:
-        logger.warning("Нет данных для загрузки муниципалитетов")
+        logger.info("Нет новых муниципалитетов для загрузки")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.critical(f"Критическая ошибка в скрипте: {e}")
+        import traceback
+        logger.critical(traceback.format_exc())

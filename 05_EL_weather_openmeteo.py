@@ -18,7 +18,7 @@ import time
 import sys
 from logger_config import setup_logging
 from db import read_sql, df_to_sql, get_engine
-from config import CITIES, START_YEAR, START_MONTH
+from config import CITIES, START_DATE
 
 logger = setup_logging()
 engine = get_engine()
@@ -175,24 +175,20 @@ def main():
     logger.info("ЗАГРУЗКА ПОГОДНЫХ ДАННЫХ ИЗ OPEN-METEO")
     logger.info("=" * 60)
 
-    START_DATE = f"{START_YEAR}-{START_MONTH:02d}-01"
     END_DATE = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
     logger.info(f"Желаемый диапазон: {START_DATE} - {END_DATE}")
 
     for city_name in CITIES:
         logger.info(f"\nОбработка города: {city_name}")
 
-        # Получаем координаты
         lat, lon = get_city_coordinates(city_name)
         if lat is None:
             logger.warning(f"  Координаты не найдены, пропускаем город")
             continue
 
-        # Получаем множество дат, которые уже есть в БД
         existing_dates = get_existing_dates(city_name)
         logger.info(f"  Уже загружено дат: {len(existing_dates)}")
 
-        # Генерируем все даты от START_DATE до END_DATE
         all_dates = set(pd.date_range(START_DATE, END_DATE,
                         freq='D').strftime('%Y-%m-%d'))
         missing_dates = all_dates - existing_dates
@@ -203,7 +199,6 @@ def main():
 
         logger.info(f"  Недостающих дат: {len(missing_dates)}")
 
-        # Группируем недостающие даты в непрерывные диапазоны
         missing_list = sorted(missing_dates)
         ranges = []
         start_range = missing_list[0]

@@ -1,25 +1,41 @@
 # config.py
+"""
+Конфигурационный файл проекта.
+
+Хранит настройки:
+- CITIES: список городов для загрузки
+- START_DATE: начальная дата загрузки (в формате ГГГГ-ММ-ДД)
+
+Параметры можно переопределить через командную строку:
+    python main.py --cities Москва,Балашиха --start-date 2020-01-01
+"""
 
 import argparse
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    """Парсер аргументов командной строки."""
+    parser = argparse.ArgumentParser(description="Настройки загрузки данных")
     parser.add_argument("--cities", type=str, help="Города через запятую")
-    parser.add_argument("--start-year", type=int,
-                        help="Год начала (например, 2021)")
-    parser.add_argument("--start-month", type=int, help="Месяц начала (1-12)")
+    parser.add_argument("--start-date", type=str,
+                        help="Дата начала в формате ГГГГ-ММ-ДД")
     args, unknown = parser.parse_known_args()
     return args
 
 
-# Значения по умолчанию
+# ============================================
+# ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ
+# ============================================
+
 DEFAULT_CITIES = ["Балашиха"]
-DEFAULT_START_YEAR = 2025
-DEFAULT_START_MONTH = 12
+DEFAULT_START_DATE = "2025-12-01"
+
+
+# ============================================
+# ИТОГОВЫЕ НАСТРОЙКИ
+# ============================================
 
 args = parse_args()
 
 CITIES = args.cities.split(',') if args.cities else DEFAULT_CITIES
-START_YEAR = args.start_year if args.start_year else DEFAULT_START_YEAR
-START_MONTH = args.start_month if args.start_month else DEFAULT_START_MONTH
+START_DATE = args.start_date if args.start_date else DEFAULT_START_DATE

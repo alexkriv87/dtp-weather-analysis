@@ -1,185 +1,244 @@
-import re
+# 05_EL_weather_openmeteo.py
+"""
+Модуль для загрузки почасовых погодных данных из Open-Meteo.
+
+1. Загружает координаты городов из cities_clean.
+2. Определяет недостающие даты (которых нет в weather_buffer).
+3. Группирует недостающие даты в непрерывные диапазоны.
+4. Загружает данные отрезками по 60 дней через API Open-Meteo.
+5. Сохраняет данные в weather_buffer.
+"""
+
+import openmeteo_requests
 import pandas as pd
-import os
-from dotenv import load_dotenv
+from retry_requests import retry
+import requests
+from datetime import datetime, timedelta
+import time
+import sys
 from logger_config import setup_logging
-from supabase import create_client, Client
+from db import read_sql, df_to_sql, get_engine
+from config import CITIES, START_YEAR, START_MONTH
 
 logger = setup_logging()
-load_dotenv()
+engine = get_engine()
 
 # ============================================
-# ПОДКЛЮЧЕНИЕ К SUPABASE
+# НАСТРОЙКА OPEN-METEO КЛИЕНТА
 # ============================================
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Сессия с автоматическими повторами при ошибках (10 попыток, пауза растет)
+retry_session = retry(requests.Session(), retries=10, backoff_factor=0.5)
+openmeteo = openmeteo_requests.Client(session=retry_session)
+
 
 # ============================================
-# ФУНКЦИЯ ОЧИСТКИ НАСЕЛЕНИЯ
+# ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ
 # ============================================
 
+def get_city_coordinates(city_name):
+    """
+    Получает координаты города из таблицы cities_clean.
+    Возвращает (широта, долгота) или (None, None) если город не найден.
+    """
+    query = f"SELECT latitude, longitude FROM cities_clean WHERE city = '{city_name}'"
+    df = read_sql(query)
+    if not df.empty:
+        return df.iloc[0]['latitude'], df.iloc[0]['longitude']
+    return None, None
 
-def clean_population(pop_str):
-    """Очищает строку с населением: убирает пробелы и преобразует в число"""
-    if pop_str is None or pd.isna(pop_str):
-        return None
 
-    # Убираем пробелы
-    cleaned = str(pop_str).replace(' ', '')
+def get_existing_dates(city_name):
+    """
+    Возвращает множество дат (YYYY-MM-DD), которые уже есть в weather_buffer для города.
+    """
+    query = f"""
+        SELECT DISTINCT time::date as date
+        FROM weather_buffer
+        WHERE city = '{city_name}'
+    """
+    df = read_sql(query)
+    if df.empty:
+        return set()
+    return set(pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d'))
 
-    # Пробуем преобразовать в число
+
+def fetch_weather_data(city_name, lat, lon, start_date, end_date):
+    """
+    Запрашивает данные из Open-Meteo за указанный период.
+    Возвращает список записей (словарей) или пустой список при ошибке.
+    """
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": float(lat),
+        "longitude": float(lon),
+        "start_date": start_date,
+        "end_date": end_date,
+        "hourly": [
+            "temperature_2m", "soil_temperature_0cm", "apparent_temperature",
+            "precipitation", "rain", "snowfall", "snow_depth",
+            "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m",
+            "visibility", "cloud_cover", "is_day", "weather_code"
+        ],
+        "timezone": "UTC"
+    }
+
     try:
-        return int(cleaned)
-    except (ValueError, TypeError):
-        # Если не получилось — возвращаем None
-        return None
+        responses = openmeteo.weather_api(url, params=params, timeout=300)
+        response = responses[0]
+        hourly = response.Hourly()
+
+        records = []
+        for i in range(len(hourly.Variables(0).ValuesAsNumpy())):
+            record = {
+                "time": pd.to_datetime(hourly.Time() + i * hourly.Interval(), unit="s").isoformat(),
+                "city": city_name,
+                "temperature_2m": str(hourly.Variables(0).ValuesAsNumpy()[i]),
+                "soil_temperature_0cm": str(hourly.Variables(1).ValuesAsNumpy()[i]),
+                "apparent_temperature": str(hourly.Variables(2).ValuesAsNumpy()[i]),
+                "precipitation": str(hourly.Variables(3).ValuesAsNumpy()[i]),
+                "rain": str(hourly.Variables(4).ValuesAsNumpy()[i]),
+                "snowfall": str(hourly.Variables(5).ValuesAsNumpy()[i]),
+                "snow_depth": str(hourly.Variables(6).ValuesAsNumpy()[i]),
+                "wind_speed_10m": str(hourly.Variables(7).ValuesAsNumpy()[i]),
+                "wind_gusts_10m": str(hourly.Variables(8).ValuesAsNumpy()[i]),
+                "wind_direction_10m": str(hourly.Variables(9).ValuesAsNumpy()[i]),
+                "visibility": str(hourly.Variables(10).ValuesAsNumpy()[i]),
+                "cloud_cover": str(hourly.Variables(11).ValuesAsNumpy()[i]),
+                "is_day": str(hourly.Variables(12).ValuesAsNumpy()[i]),
+                "weather_code": str(hourly.Variables(13).ValuesAsNumpy()[i])
+            }
+            records.append(record)
+
+        logger.info(
+            f"  Получено {len(records)} записей за {start_date}..{end_date}")
+        return records
+
+    except Exception as e:
+        logger.error(f"  Ошибка при запросе данных: {e}")
+        return []
+
+
+def save_weather_data(records, city_name):
+    """
+    Сохраняет записи в weather_buffer через df_to_sql пачками по 500 строк.
+    Возвращает количество сохранённых записей.
+    """
+    if not records:
+        return 0
+    df = pd.DataFrame(records)
+    try:
+        df_to_sql(df, 'weather_buffer', if_exists='append', chunksize=500)
+        logger.info(f"    Сохранено {len(df)} записей")
+        return len(df)
+    except Exception as e:
+        logger.error(f"  Ошибка при сохранении в БД: {e}")
+        return 0
+
+
+def load_date_range(city_name, lat, lon, start_date, end_date):
+    """
+    Загружает один непрерывный диапазон дат, разбивая его на отрезки по 60 дней.
+    Возвращает количество сохранённых записей.
+    """
+    total_saved = 0
+    current_start = datetime.strptime(start_date, '%Y-%m-%d')
+    end = datetime.strptime(end_date, '%Y-%m-%d')
+
+    while current_start <= end:
+        current_end = current_start + timedelta(days=59)
+        if current_end > end:
+            current_end = end
+
+        logger.info(
+            f"    Загружаем отрезок: {current_start.date()} - {current_end.date()}")
+        records = fetch_weather_data(
+            city_name, lat, lon,
+            current_start.strftime('%Y-%m-%d'),
+            current_end.strftime('%Y-%m-%d')
+        )
+        saved = save_weather_data(records, city_name)
+        total_saved += saved
+
+        current_start = current_end + timedelta(days=1)
+        time.sleep(30)
+
+    return total_saved
+
 
 # ============================================
 # ОСНОВНАЯ ФУНКЦИЯ
 # ============================================
 
-
 def main():
-    logger.info("Начинаем обновление cities_clean")
+    logger.info("=" * 60)
+    logger.info("ЗАГРУЗКА ПОГОДНЫХ ДАННЫХ ИЗ OPEN-METEO")
+    logger.info("=" * 60)
 
-    # ============================================
-    # 1. ЗАГРУЖАЕМ СУЩЕСТВУЮЩИЕ ГОРОДА ИЗ cities_clean
-    # ============================================
+    START_DATE = f"{START_YEAR}-{START_MONTH:02d}-01"
+    END_DATE = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    logger.info(f"Желаемый диапазон: {START_DATE} - {END_DATE}")
 
-    logger.info("Загружаем существующие города из cities_clean")
-    clean_rows = []
-    start = 0
-    step = 1000
+    for city_name in CITIES:
+        logger.info(f"\nОбработка города: {city_name}")
 
-    while True:
-        result = supabase.table('cities_clean')\
-            .select('*')\
-            .range(start, start + step - 1)\
-            .execute()
+        # Получаем координаты
+        lat, lon = get_city_coordinates(city_name)
+        if lat is None:
+            logger.warning(f"  Координаты не найдены, пропускаем город")
+            continue
 
-        if not result.data:
-            break
+        # Получаем множество дат, которые уже есть в БД
+        existing_dates = get_existing_dates(city_name)
+        logger.info(f"  Уже загружено дат: {len(existing_dates)}")
 
-        clean_rows.extend(result.data)
-        start += step
+        # Генерируем все даты от START_DATE до END_DATE
+        all_dates = set(pd.date_range(START_DATE, END_DATE,
+                        freq='D').strftime('%Y-%m-%d'))
+        missing_dates = all_dates - existing_dates
 
-    logger.info(f"Всего загружено из чистовой: {len(clean_rows)} записей")
+        if not missing_dates:
+            logger.info("  Все даты уже загружены")
+            continue
 
-    # Создаём множество ключей существующих городов
-    existing_keys = set()
-    for row in clean_rows:
-        key = f"{row['city']};{row['region']}"
-        existing_keys.add(key)
+        logger.info(f"  Недостающих дат: {len(missing_dates)}")
 
-    # ============================================
-    # 2. ЗАГРУЖАЕМ ВСЕ ГОРОДА ИЗ cities_buffer
-    # ============================================
+        # Группируем недостающие даты в непрерывные диапазоны
+        missing_list = sorted(missing_dates)
+        ranges = []
+        start_range = missing_list[0]
+        prev = start_range
 
-    logger.info("Загружаем города из cities_buffer")
-    buffer_rows = []
-    start = 0
+        for date in missing_list[1:]:
+            curr = datetime.strptime(date, '%Y-%m-%d')
+            prev_dt = datetime.strptime(prev, '%Y-%m-%d')
+            if (curr - prev_dt).days > 1:
+                ranges.append((start_range, prev))
+                start_range = date
+            prev = date
+        ranges.append((start_range, prev))
 
-    while True:
-        result = supabase.table('cities_buffer')\
-            .select('*')\
-            .range(start, start + step - 1)\
-            .execute()
+        logger.info(
+            f"  Найдено {len(ranges)} непрерывных диапазонов для загрузки")
 
-        if not result.data:
-            break
+        total_saved = 0
+        for start, end in ranges:
+            logger.info(f"  Загружаем диапазон: {start} - {end}")
+            total_saved += load_date_range(city_name, lat, lon, start, end)
 
-        buffer_rows.extend(result.data)
-        start += step
+        logger.info(
+            f"  Всего сохранено для {city_name}: {total_saved} записей")
 
-    if not buffer_rows:
-        logger.error("Нет данных в cities_buffer")
-        return
-
-    logger.info(f"Всего загружено из буфера: {len(buffer_rows)} записей")
-
-    # Создаём множество ключей для буфера
-    buffer_keys = set()
-    for row in buffer_rows:
-        key = f"{row['city']};{row['region']}"
-        buffer_keys.add(key)
-
-    # ============================================
-    # 3. НАХОДИМ НОВЫЕ ГОРОДА
-    # ============================================
-
-    logger.info("Ищем новые города")
-
-    # Новые города = ключи из буфера, которых нет в чистовой
-    new_keys = buffer_keys - existing_keys
-    logger.info(f"Найдено новых городов: {len(new_keys)}")
-
-    if not new_keys:
-        logger.info("Новых городов нет, работа завершена")
-        return
-
-    # ============================================
-    # 4. ПОДГОТАВЛИВАЕМ ТОЛЬКО НОВЫЕ ГОРОДА
-    # ============================================
-
-    logger.info("Подготавливаем данные для новых городов")
-    records = []
-
-    # Проходим по всем городам из буфера
-    for row in buffer_rows:
-        key = f"{row['city']};{row['region']}"
-
-        # Если город новый - обрабатываем
-        if key in new_keys:
-            # Очищаем population
-            population = clean_population(row['population'])
-
-            # Преобразуем координаты в числа
-            try:
-                latitude = float(row['latitude'])
-                longitude = float(row['longitude'])
-            except (ValueError, TypeError):
-                latitude = None
-                longitude = None
-
-            record = {
-                'city': row['city'],
-                'region': row['region'],
-                'federal': row['federal'],
-                'population': population,
-                'founded_or_first_mentioned': row['founded_or_first_mentioned'],
-                'status': row['status'],
-                'old_names': row['old_names'],
-                'latitude': latitude,
-                'longitude': longitude,
-                'gibdd_codes': row['gibdd_codes'],
-                'gibdd_region_id': row['gibdd_region_id'],
-                'gibdd_type': row['gibdd_type']
-            }
-            records.append(record)
-
-    logger.info(f"Подготовлено к вставке: {len(records)} записей")
-
-    # ============================================
-    # 5. ВСТАВЛЯЕМ НОВЫЕ ГОРОДА
-    # ============================================
-
-    logger.info("Вставляем новые города в cities_clean")
-    total_inserted = 0
-    for record in records:
-        try:
-            result = supabase.table('cities_clean').insert(record).execute()
-            if result.data:
-                total_inserted += 1
-                logger.info(
-                    f"Город {record['city']} ({record['region']}) сохранен")
-        except Exception as e:
-            logger.error(f"Ошибка при вставке города {record['city']}: {e}")
-
-    logger.info(
-        f"Всего сохранено в cities_clean: {total_inserted} новых записей")
+    logger.info("\n" + "=" * 60)
+    logger.info("ЗАГРУЗКА ПОГОДЫ ЗАВЕРШЕНА")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.critical(f"Критическая ошибка: {e}")
+        import traceback
+        logger.critical(traceback.format_exc())
+        sys.exit(1)

@@ -25,6 +25,7 @@ CREATE TABLE weather_buffer (
     id SERIAL PRIMARY KEY,
     time TEXT,
     city TEXT,
+    city_id INTEGER,
     temperature_2m TEXT,
     soil_temperature_0cm TEXT,
     apparent_temperature TEXT,
@@ -41,6 +42,9 @@ CREATE TABLE weather_buffer (
     weather_code TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE INDEX idx_weather_buffer_city_time ON weather_buffer (city, time);
+CREATE INDEX idx_weather_buffer_city_id ON weather_buffer (city_id);
 
 -- Таблица для регионов (с геометрией)
 CREATE TABLE gibdd_regions (
@@ -84,25 +88,32 @@ CREATE UNIQUE INDEX idx_gibdd_dtp_buffer_kart_id ON gibdd_dtp_buffer (kart_id, d
 -- ============================================
 
 -- Нормализованные города
-CREATE TABLE cities_clean (
-    id SERIAL NOT NULL,
-    city TEXT NULL,
-    region TEXT NULL,
-    federal TEXT NULL,
-    population INTEGER NULL,
-    founded_or_first_mentioned TEXT NULL,
-    status TEXT NULL,
-    old_names TEXT NULL,
-    latitude NUMERIC NULL,
-    longitude NUMERIC NULL,
-    gibdd_codes TEXT NULL,
-    gibdd_region_id TEXT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE NULL DEFAULT NOW(),
-    CONSTRAINT cities_clean_pkey PRIMARY KEY (id),
-    CONSTRAINT cities_clean_city_region_key UNIQUE (city, region)
+CREATE TABLE weather_clean (
+    id SERIAL PRIMARY KEY,
+    city_id INTEGER NOT NULL,
+    time TIMESTAMP WITH TIME ZONE NOT NULL,
+    time_local TIMESTAMP WITH TIME ZONE,
+    temperature NUMERIC,
+    apparent_temperature NUMERIC,
+    precipitation NUMERIC,
+    rain NUMERIC,
+    snowfall NUMERIC,
+    snow_depth NUMERIC,
+    wind_speed_10m NUMERIC,
+    wind_gusts_10m NUMERIC,
+    wind_direction_10m NUMERIC,
+    cloud_cover NUMERIC,
+    is_day NUMERIC,
+    weather_code NUMERIC,
+    visibility NUMERIC,
+    soil_temperature_0cm NUMERIC,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(city_id, time)
 );
 
--- weather_clean (позже)
+CREATE INDEX idx_weather_clean_city_time ON weather_clean (city_id, time);
+
+
 -- gibdd_dtp_main (позже)
 -- gibdd_dtp_place (позже)
 -- gibdd_vehicles (позже)

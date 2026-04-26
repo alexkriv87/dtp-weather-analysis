@@ -2,11 +2,11 @@
 """
 Модуль для загрузки почасовых погодных данных из Open-Meteo.
 
-1. Загружает координаты городов из cities_clean.
+1. Загружает координаты и city_id городов из cities_clean.
 2. Определяет недостающие даты (которых нет в weather_buffer).
 3. Группирует недостающие даты в непрерывные диапазоны.
 4. Загружает данные отрезками по 60 дней через API Open-Meteo.
-5. Сохраняет данные в weather_buffer.
+5. Сохраняет данные в weather_buffer вместе с city_id.
 """
 
 import openmeteo_requests
@@ -36,16 +36,16 @@ openmeteo = openmeteo_requests.Client(session=retry_session)
 # ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ
 # ============================================
 
-def get_city_coordinates(city_name):
+def get_city_info(city_name):
     """
-    Получает координаты города из таблицы cities_clean.
-    Возвращает (широта, долгота) или (None, None) если город не найден.
+    Получает id, координаты города из таблицы cities_clean.
+    Возвращает (city_id, latitude, longitude) или (None, None, None).
     """
-    query = f"SELECT latitude, longitude FROM cities_clean WHERE city = '{city_name}'"
+    query = f"SELECT id, latitude, longitude FROM cities_clean WHERE city = '{city_name}'"
     df = read_sql(query)
     if not df.empty:
-        return df.iloc[0]['latitude'], df.iloc[0]['longitude']
-    return None, None
+        return df.iloc[0]['id'], df.iloc[0]['latitude'], df.iloc[0]['longitude']
+    return None, None, None
 
 
 def get_existing_dates(city_name):
@@ -119,7 +119,7 @@ def fetch_weather_data(city_name, lat, lon, start_date, end_date):
         return []
 
 
-def save_weather_data(records, city_name):
+def save_weather_data(records, city_id):
     """
     Сохраняет записи в weather_buffer через df_to_sql пачками по 500 строк.
     Возвращает количество сохранённых записей.
@@ -127,6 +127,8 @@ def save_weather_data(records, city_name):
     if not records:
         return 0
     df = pd.DataFrame(records)
+    # Добавляем city_id в DataFrame
+    df['city_id'] = city_id
     try:
         df_to_sql(df, 'weather_buffer', if_exists='append', chunksize=500)
         logger.info(f"    Сохранено {len(df)} записей")
@@ -136,7 +138,7 @@ def save_weather_data(records, city_name):
         return 0
 
 
-def load_date_range(city_name, lat, lon, start_date, end_date):
+def load_date_range(city_name, city_id, lat, lon, start_date, end_date):
     """
     Загружает один непрерывный диапазон дат, разбивая его на отрезки по 60 дней.
     Возвращает количество сохранённых записей.
@@ -157,7 +159,7 @@ def load_date_range(city_name, lat, lon, start_date, end_date):
             current_start.strftime('%Y-%m-%d'),
             current_end.strftime('%Y-%m-%d')
         )
-        saved = save_weather_data(records, city_name)
+        saved = save_weather_data(records, city_id)
         total_saved += saved
 
         current_start = current_end + timedelta(days=1)
@@ -181,9 +183,15 @@ def main():
     for city_name in CITIES:
         logger.info(f"\nОбработка города: {city_name}")
 
-        lat, lon = get_city_coordinates(city_name)
+        # Получаем city_id и координаты
+        city_id, lat, lon = get_city_info(city_name)
+        if city_id is None:
+            logger.warning(
+                f"  Город {city_name} не найден в cities_clean, пропускаем")
+            continue
         if lat is None:
-            logger.warning(f"  Координаты не найдены, пропускаем город")
+            logger.warning(
+                f"  Координаты не найдены для {city_name}, пропускаем")
             continue
 
         existing_dates = get_existing_dates(city_name)
@@ -219,7 +227,8 @@ def main():
         total_saved = 0
         for start, end in ranges:
             logger.info(f"  Загружаем диапазон: {start} - {end}")
-            total_saved += load_date_range(city_name, lat, lon, start, end)
+            total_saved += load_date_range(city_name,
+                                           city_id, lat, lon, start, end)
 
         logger.info(
             f"  Всего сохранено для {city_name}: {total_saved} записей")

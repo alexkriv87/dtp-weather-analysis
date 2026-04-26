@@ -91,8 +91,8 @@ CREATE UNIQUE INDEX idx_gibdd_dtp_buffer_kart_id ON gibdd_dtp_buffer (kart_id, d
 CREATE TABLE weather_clean (
     id SERIAL PRIMARY KEY,
     city_id INTEGER NOT NULL,
-    time TIMESTAMP WITH TIME ZONE NOT NULL,
-    time_local TIMESTAMP WITH TIME ZONE,
+    time_utc TIMESTAMP NOT NULL,
+    time_local TIMESTAMP,
     temperature NUMERIC,
     apparent_temperature NUMERIC,
     precipitation NUMERIC,
@@ -107,11 +107,11 @@ CREATE TABLE weather_clean (
     weather_code NUMERIC,
     visibility NUMERIC,
     soil_temperature_0cm NUMERIC,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(city_id, time)
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(city_id, time_utc)
 );
 
-CREATE INDEX idx_weather_clean_city_time ON weather_clean (city_id, time);
+CREATE INDEX idx_weather_clean_city_time ON weather_clean (city_id, time_utc);
 
 
 -- gibdd_dtp_main (позже)

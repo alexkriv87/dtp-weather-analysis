@@ -47,30 +47,46 @@ def main():
         logger.info("Нет данных в weather_buffer")
         return
     logger.info(f"Загружено из буфера: {len(df_buffer)} записей")
+    # Приводим time к datetime (без часового пояса)
+    df_buffer['time'] = pd.to_datetime(df_buffer['time'], utc=False)
 
     # ============================================
     # 2. ЗАГРУЖАЕМ СУЩЕСТВУЮЩИЕ ВРЕМЕННЫЕ МЕТКИ ИЗ weather_clean
     # ============================================
 
-    logger.info("Загружаем существующие временные метки из weather_clean")
-    df_existing = read_sql("SELECT DISTINCT time FROM weather_clean")
+    logger.info("Загружаем существующие записи из weather_clean")
+    df_count = read_sql("SELECT COUNT(*) as cnt FROM weather_clean")
+    total_existing = df_count.iloc[0]['cnt'] if not df_count.empty else 0
+    logger.info(f"Уже загружено записей в weather_clean: {total_existing}")
+
+    # Загружаем уникальные временные метки для фильтрации
+    df_existing = read_sql("SELECT DISTINCT time_utc FROM weather_clean")
+    if not df_existing.empty:
+        df_existing['time_utc'] = pd.to_datetime(
+            df_existing['time_utc'], utc=False)
     existing_timestamps = set(
-        df_existing['time']) if not df_existing.empty else set()
-    logger.info(f"Уже загружено записей: {len(existing_timestamps)}")
+        df_existing['time_utc']) if not df_existing.empty else set()
 
     # ============================================
     # 3. ФИЛЬТРУЕМ НОВЫЕ ЗАПИСИ (через merge)
     # ============================================
 
     logger.info("Фильтруем новые записи")
-    df_merged = df_buffer.merge(
-        df_existing[['time']],
-        on='time',
-        how='left',
-        indicator=True
-    )
-    df_new = df_merged[df_merged['_merge'] ==
-                       'left_only'].drop(columns=['_merge'])
+    # Если existing_timestamps пустое, создаём пустой DataFrame
+    if existing_timestamps:
+        # Переименовываем колонку для merge
+        df_existing_rename = df_existing.rename(columns={'time_utc': 'time'})
+        df_merged = df_buffer.merge(
+            df_existing_rename[['time']],
+            on='time',
+            how='left',
+            indicator=True
+        )
+        df_new = df_merged[df_merged['_merge'] ==
+                           'left_only'].drop(columns=['_merge'])
+    else:
+        df_new = df_buffer.copy()
+
     logger.info(f"Найдено новых записей: {len(df_new)}")
 
     if df_new.empty:
@@ -82,9 +98,6 @@ def main():
     # ============================================
 
     logger.info("Преобразуем типы данных")
-
-    # Преобразуем time в datetime
-    df_new['time'] = pd.to_datetime(df_new['time'])
 
     # Колонки для преобразования в float
     float_cols = [
@@ -103,14 +116,16 @@ def main():
     # ============================================
 
     logger.info("Вычисляем местное время")
+    # Убеждаемся, что time в нужном формате
+    df_new['time_utc'] = pd.to_datetime(df_new['time'], utc=False)
     df_new['time_local'] = df_new.apply(
-        lambda row: row['time'] +
-        timedelta(hours=TIMEZONE_OFFSET[row['city']]),
+        lambda row: row['time_utc'] +
+        timedelta(hours=TIMEZONE_OFFSET.get(row['city'], 0)),
         axis=1
     )
     df_new['time_local'] = df_new['time_local'].dt.strftime(
         '%Y-%m-%dT%H:%M:%S')
-    df_new['time'] = df_new['time'].dt.strftime('%Y-%m-%dT%H:%M:%S')
+    df_new['time_utc'] = df_new['time_utc'].dt.strftime('%Y-%m-%dT%H:%M:%S')
 
     # ============================================
     # 6. ПОДГОТОВКА ДАННЫХ ДЛЯ ВСТАВКИ
@@ -120,7 +135,7 @@ def main():
 
     # Выбираем нужные колонки и переименовываем
     df_to_insert = df_new[[
-        'city_id', 'time', 'time_local',
+        'city_id', 'time_utc', 'time_local',
         'temperature_2m', 'apparent_temperature', 'precipitation', 'rain',
         'snowfall', 'snow_depth', 'wind_speed_10m', 'wind_gusts_10m',
         'wind_direction_10m', 'cloud_cover', 'is_day', 'weather_code',

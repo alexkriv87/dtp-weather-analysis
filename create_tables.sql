@@ -64,9 +64,26 @@ CREATE TABLE gibdd_municipalities (
 
 CREATE INDEX idx_gibdd_municipalities_name ON gibdd_municipalities (municipality_name);
 
--- Индекс для быстрого поиска по составному ключу (город + регион)
-CREATE INDEX idx_gibdd_codes_buffer_city_region ON gibdd_codes_buffer (city, region_name);
+CREATE TABLE gibdd_dtp_buffer (
+    id SERIAL PRIMARY KEY,
+    city TEXT,
+    city_id INTEGER,              
+    district_id TEXT,
+    gibdd_region_id TEXT,         
+    date TEXT,
+    kart_id TEXT,
+    raw_data TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 
+CREATE INDEX idx_gibdd_dtp_buffer_city_date ON gibdd_dtp_buffer (city, date);
+CREATE UNIQUE INDEX idx_gibdd_dtp_buffer_kart_id ON gibdd_dtp_buffer (kart_id, district_id);
+
+-- ============================================
+-- ЧИСТОВЫЕ ТАБЛИЦЫ
+-- ============================================
+
+-- Нормализованные города
 CREATE TABLE cities_clean (
     id SERIAL NOT NULL,
     city TEXT NULL,
@@ -84,10 +101,6 @@ CREATE TABLE cities_clean (
     CONSTRAINT cities_clean_pkey PRIMARY KEY (id),
     CONSTRAINT cities_clean_city_region_key UNIQUE (city, region)
 );
-
--- ============================================
--- ЧИСТОВЫЕ ТАБЛИЦЫ (будут создаваться по мере готовности)
--- ============================================
 
 -- weather_clean (позже)
 -- gibdd_dtp_main (позже)

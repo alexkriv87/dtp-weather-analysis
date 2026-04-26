@@ -1,38 +1,29 @@
+# 07_T_weather_clean.py
+"""
+Модуль для нормализации погодных данных.
+
+1. Загружает данные из weather_buffer (с уже проставленным city_id).
+2. Загружает существующие временные метки из weather_clean.
+3. Фильтрует новые записи через merge.
+4. Преобразует типы данных (to_float).
+5. Вычисляет местное время (time_local) по часовому поясу города.
+6. Сохраняет данные в weather_clean пачками по 500 строк.
+"""
+
 import pandas as pd
-from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
+from datetime import timedelta
 from logger_config import setup_logging
-from supabase import create_client, Client
+from db import read_sql, df_to_sql, get_engine
+from config import TIMEZONE_OFFSET
 
 logger = setup_logging()
-load_dotenv()
-
-# ============================================
-# ПОДКЛЮЧЕНИЕ К SUPABASE
-# ============================================
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ============================================
-# СЛОВАРЬ ЧАСОВЫХ ПОЯСОВ
-# ============================================
-# Смещение от UTC в часах
-timezone_offset = {
-    'Москва': 3,
-    'Балашиха': 3
-    # при добавлении новых городов - дописывать сюда
-}
-
-# ============================================
-# ФУНКЦИЯ ПРЕОБРАЗОВАНИЯ ЗНАЧЕНИЙ
-# ============================================
+engine = get_engine()
 
 
 def to_float(value):
-    """Преобразует строку в float, обрабатывая None и 'nan'"""
+    """
+    Преобразует строку в float, обрабатывая None и 'nan'.
+    """
     if value is None or value == 'nan':
         return None
     try:
@@ -40,210 +31,123 @@ def to_float(value):
     except (ValueError, TypeError):
         return None
 
-# ============================================
-# ОСНОВНАЯ ФУНКЦИЯ
-# ============================================
-
 
 def main():
-    logger.info("Начинаем обновление weather_clean")
+    logger.info("=" * 60)
+    logger.info("НОРМАЛИЗАЦИЯ ПОГОДНЫХ ДАННЫХ")
+    logger.info("=" * 60)
 
     # ============================================
-    # 1. ЗАГРУЖАЕМ СЛОВАРЬ ГОРОДОВ
+    # 1. ЗАГРУЖАЕМ ВСЕ ЗАПИСИ ИЗ БУФЕРА
     # ============================================
 
-    logger.info("Загружаем города из cities_clean")
-    # Словарь: название города -> его id (для быстрого поиска)
-    city_dict = {}
-    start = 0
-    step = 1000
-
-    while True:
-        result = supabase.table('cities_clean')\
-            .select('id, city')\
-            .range(start, start + step - 1)\
-            .execute()
-
-        if not result.data:
-            break
-
-        for row in result.data:
-            city_dict[row['city']] = row['id']
-
-        start += step
-
-    logger.info(f"Загружено городов: {len(city_dict)}")
+    logger.info("Загружаем записи из weather_buffer")
+    df_buffer = read_sql("SELECT * FROM weather_buffer")
+    if df_buffer.empty:
+        logger.info("Нет данных в weather_buffer")
+        return
+    logger.info(f"Загружено из буфера: {len(df_buffer)} записей")
 
     # ============================================
-    # 2. ПОЛУЧАЕМ СПИСОК ГОРОДОВ ИЗ БУФЕРА (С ПАГИНАЦИЕЙ)
+    # 2. ЗАГРУЖАЕМ СУЩЕСТВУЮЩИЕ ВРЕМЕННЫЕ МЕТКИ ИЗ weather_clean
     # ============================================
 
-    logger.info("Получаем список городов из weather_buffer")
-    cities = set()
-    start = 0
-    step = 1000
-
-    while True:
-        result = supabase.table('weather_buffer')\
-            .select('city')\
-            .range(start, start + step - 1)\
-            .execute()
-
-        if not result.data:
-            break
-
-        for row in result.data:
-            cities.add(row['city'])
-
-        start += step
-
-    logger.info(f"Найдено городов в буфере: {len(cities)}")
+    logger.info("Загружаем существующие временные метки из weather_clean")
+    df_existing = read_sql("SELECT DISTINCT time FROM weather_clean")
+    existing_timestamps = set(
+        df_existing['time']) if not df_existing.empty else set()
+    logger.info(f"Уже загружено записей: {len(existing_timestamps)}")
 
     # ============================================
-    # 3. ОБРАБАТЫВАЕМ КАЖДЫЙ ГОРОД
+    # 3. ФИЛЬТРУЕМ НОВЫЕ ЗАПИСИ (через merge)
     # ============================================
 
-    all_inserted = 0  # общий счётчик для всех городов
+    logger.info("Фильтруем новые записи")
+    df_merged = df_buffer.merge(
+        df_existing[['time']],
+        on='time',
+        how='left',
+        indicator=True
+    )
+    df_new = df_merged[df_merged['_merge'] ==
+                       'left_only'].drop(columns=['_merge'])
+    logger.info(f"Найдено новых записей: {len(df_new)}")
 
-    for city_name in cities:
-        logger.info(f"Обрабатываем город: {city_name}")
+    if df_new.empty:
+        logger.info("Новых записей нет")
+        return
 
-        # Получаем city_id по названию города
-        city_id = city_dict.get(city_name)
-        if not city_id:
-            logger.warning(
-                f"Город {city_name} не найден в cities_clean, пропускаем")
-            continue
+    # ============================================
+    # 4. ПРЕОБРАЗУЕМ ТИПЫ ДАННЫХ
+    # ============================================
 
-        # Получаем смещение часового пояса для города
-        offset = timezone_offset[city_name]
+    logger.info("Преобразуем типы данных")
 
-        # ============================================
-        # 3.1. ЗАГРУЖАЕМ СУЩЕСТВУЮЩИЕ ЗАПИСИ ИЗ weather_clean
-        # ============================================
+    # Преобразуем time в datetime
+    df_new['time'] = pd.to_datetime(df_new['time'])
 
-        # Множество временных меток (UTC), которые уже есть в чистовой таблице для этого города
-        existing_timestamps = set()
-        start = 0
+    # Колонки для преобразования в float
+    float_cols = [
+        'temperature_2m', 'apparent_temperature', 'precipitation', 'rain',
+        'snowfall', 'snow_depth', 'wind_speed_10m', 'wind_gusts_10m',
+        'wind_direction_10m', 'cloud_cover', 'is_day', 'weather_code',
+        'visibility', 'soil_temperature_0cm'
+    ]
 
-        while True:
-            result = supabase.table('weather_clean')\
-                .select('time')\
-                .eq('city_id', city_id)\
-                .range(start, start + step - 1)\
-                .execute()
+    for col in float_cols:
+        if col in df_new.columns:
+            df_new[col] = df_new[col].apply(to_float)
 
-            if not result.data:
-                break
+    # ============================================
+    # 5. ВЫЧИСЛЯЕМ МЕСТНОЕ ВРЕМЯ
+    # ============================================
 
-            for row in result.data:
-                # Отрезаем часовой пояс (+00:00), оставляем чистое UTC время
-                clean_time = row['time'].replace('+00:00', '')
-                existing_timestamps.add(clean_time)
+    logger.info("Вычисляем местное время")
+    df_new['time_local'] = df_new.apply(
+        lambda row: row['time'] +
+        timedelta(hours=TIMEZONE_OFFSET[row['city']]),
+        axis=1
+    )
+    df_new['time_local'] = df_new['time_local'].dt.strftime(
+        '%Y-%m-%dT%H:%M:%S')
+    df_new['time'] = df_new['time'].dt.strftime('%Y-%m-%dT%H:%M:%S')
 
-            start += step
+    # ============================================
+    # 6. ПОДГОТОВКА ДАННЫХ ДЛЯ ВСТАВКИ
+    # ============================================
 
+    logger.info("Подготавливаем данные для вставки")
+
+    # Выбираем нужные колонки и переименовываем
+    df_to_insert = df_new[[
+        'city_id', 'time', 'time_local',
+        'temperature_2m', 'apparent_temperature', 'precipitation', 'rain',
+        'snowfall', 'snow_depth', 'wind_speed_10m', 'wind_gusts_10m',
+        'wind_direction_10m', 'cloud_cover', 'is_day', 'weather_code',
+        'visibility', 'soil_temperature_0cm'
+    ]].copy()
+
+    df_to_insert = df_to_insert.rename(
+        columns={'temperature_2m': 'temperature'})
+
+    # ============================================
+    # 7. ВСТАВКА В weather_clean
+    # ============================================
+
+    logger.info("Сохраняем данные в weather_clean")
+    try:
+        df_to_sql(df_to_insert, 'weather_clean',
+                  if_exists='append', chunksize=500)
         logger.info(
-            f"  Загружено существующих записей из чистовой: {len(existing_timestamps)}")
-
-        # ============================================
-        # 3.2. ЗАГРУЖАЕМ ДАННЫЕ ИЗ weather_buffer
-        # ============================================
-
-        # Список всех записей из буфера для этого города
-        buffer_rows = []
-        start = 0
-
-        while True:
-            result = supabase.table('weather_buffer')\
-                .select('*')\
-                .eq('city', city_name)\
-                .range(start, start + step - 1)\
-                .execute()
-
-            if not result.data:
-                break
-
-            buffer_rows.extend(result.data)
-            start += step
-
-        logger.info(f"  Загружено из буфера: {len(buffer_rows)} записей")
-
-        # ============================================
-        # 3.3. ОТБИРАЕМ НОВЫЕ ЗАПИСИ
-        # ============================================
-
-        # Список записей, которые будем вставлять в чистовую таблицу
-        new_records = []
-        for row in buffer_rows:
-            # Проверяем, есть ли уже такая временная метка (UTC)
-            if row['time'] in existing_timestamps:
-                continue
-
-            # Вычисляем местное время (UTC + смещение)
-            dt_utc = datetime.fromisoformat(row['time'])
-            dt_local = dt_utc + timedelta(hours=offset)
-
-            # Преобразуем все поля в числа
-            record = {
-                'city_id': city_id,
-                'time': row['time'],
-                'time_local': dt_local.isoformat(),
-                'temperature': to_float(row['temperature_2m']),
-                'apparent_temperature': to_float(row['apparent_temperature']),
-                'precipitation': to_float(row['precipitation']),
-                'rain': to_float(row['rain']),
-                'snowfall': to_float(row['snowfall']),
-                'snow_depth': to_float(row['snow_depth']),
-                'wind_speed_10m': to_float(row['wind_speed_10m']),
-                'wind_gusts_10m': to_float(row['wind_gusts_10m']),
-                'wind_direction_10m': to_float(row['wind_direction_10m']),
-                'cloud_cover': to_float(row['cloud_cover']),
-                'is_day': to_float(row['is_day']),
-                'weather_code': to_float(row['weather_code']),
-                'visibility': to_float(row['visibility']),
-                'soil_temperature_0cm': to_float(row['soil_temperature_0cm'])
-            }
-            new_records.append(record)
-
-        logger.info(f"  Найдено новых записей: {len(new_records)}")
-
-        # ============================================
-        # 3.4. ВСТАВЛЯЕМ НОВЫЕ ЗАПИСИ ПАЧКАМИ
-        # ============================================
-
-        if new_records:
-            batch_size = 500  # сколько записей вставляем за один раз
-            pos = 0  # текущая позиция в списке new_records
-            city_inserted = 0  # счётчик для этого города
-
-            while pos < len(new_records):
-                end = pos + batch_size
-                batch = new_records[pos:end]  # очередная пачка записей
-
-                try:
-                    result = supabase.table(
-                        'weather_clean').insert(batch).execute()
-                    if result.data:
-                        city_inserted += len(batch)
-                        logger.info(f"    Вставлены записи с {pos} по {end-1}")
-                except Exception as e:
-                    logger.error(f"    Ошибка при вставке: {e}")
-
-                pos = end  # переходим к следующей пачке
-
-            all_inserted += city_inserted
-            logger.info(
-                f"  Для города {city_name} добавлено {city_inserted} записей")
-        else:
-            logger.info(f"  Для города {city_name} новых записей нет")
-
-    # ============================================
-    # 4. ИТОГ
-    # ============================================
-
-    logger.info(f"Всего добавлено записей в weather_clean: {all_inserted}")
+            f"Успешно добавлено {len(df_to_insert)} записей в weather_clean")
+    except Exception as e:
+        logger.error(f"Ошибка при вставке: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.critical(f"Критическая ошибка: {e}")
+        import traceback
+        logger.critical(traceback.format_exc())

@@ -226,10 +226,9 @@ def main():
         logger.info("Нет новых муниципалитетов для загрузки")
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.critical(f"Критическая ошибка в скрипте: {e}")
-        import traceback
-        logger.critical(traceback.format_exc())
+try:
+    main()
+except Exception as e:
+    logger.critical(f"Критическая ошибка в скрипте: {e}")
+    import traceback
+    logger.critical(traceback.format_exc())

@@ -238,11 +238,10 @@ def main():
     logger.info("=" * 60)
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.critical(f"Критическая ошибка: {e}")
-        import traceback
-        logger.critical(traceback.format_exc())
-        sys.exit(1)
+try:
+    main()
+except Exception as e:
+    logger.critical(f"Критическая ошибка: {e}")
+    import traceback
+    logger.critical(traceback.format_exc())
+    sys.exit(1)

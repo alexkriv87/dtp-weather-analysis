@@ -159,10 +159,9 @@ def main():
         logger.error(f"Ошибка при вставке: {e}")
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.critical(f"Критическая ошибка: {e}")
-        import traceback
-        logger.critical(traceback.format_exc())
+try:
+    main()
+except Exception as e:
+    logger.critical(f"Критическая ошибка: {e}")
+    import traceback
+    logger.critical(traceback.format_exc())

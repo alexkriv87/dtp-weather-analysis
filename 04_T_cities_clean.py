@@ -196,9 +196,8 @@ def main():
         f"Обновление кодов завершено. Обновлено: {updated_count}, не найдено: {not_found_count}")
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.critical(f"Критическая ошибка в скрипте: {e}")
-        logger.critical(traceback.format_exc())
+try:
+    main()
+except Exception as e:
+    logger.critical(f"Критическая ошибка в скрипте: {e}")
+    logger.critical(traceback.format_exc())

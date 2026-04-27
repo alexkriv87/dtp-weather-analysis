@@ -148,7 +148,10 @@ def fetch_dtp_for_month(city_name, city_id, region_id, district_codes, year, mon
                         'city': city_name,
                         'city_id': city_id,
                         'district_id': code,
+                        'region_id': region_id,
                         'gibdd_region_id': region_id,
+                        'year': str(year),
+                        'month': str(month),
                         'date': f"{year}-{month:02d}-01",
                         'kart_id': dtp.get('KartId'),
                         'raw_data': raw_json
@@ -188,8 +191,11 @@ def save_dtp_data(records, city_name):
         df['kart_id'] = df['kart_id'].astype(str)
 
     # Выбираем нужные колонки
-    columns_to_insert = ['city', 'city_id', 'district_id',
-                         'gibdd_region_id', 'date', 'kart_id', 'raw_data']
+    columns_to_insert = [
+        'city', 'city_id', 'district_id',
+        'region_id', 'gibdd_region_id',
+        'year', 'month', 'date', 'kart_id', 'raw_data'
+    ]
     df_to_insert = df[columns_to_insert].copy()
 
     try:

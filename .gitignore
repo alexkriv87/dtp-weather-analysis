@@ -6,3 +6,4 @@ data/
 *.log
 tempCodeRunnerFile.py
 Test.ipynb
+create_tables.sql

@@ -1,3 +1,5 @@
+# main.py
+
 import subprocess
 import time
 
@@ -6,7 +8,7 @@ start_time = time.time()
 scripts = [
     '01_EL_cities_from_wiki.py',
     '02_EL_geocode_cities.py',
-    '03_EL_gibdd_codes.py',
+    # '03_EL_gibdd_codes.py',
     '04_T_cities_clean.py',
     '05_EL_weather_openmeteo.py',
     '06_EL_gibdd_dtp.py',

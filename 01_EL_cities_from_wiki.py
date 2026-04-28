@@ -12,10 +12,13 @@ import requests
 import pandas as pd
 import warnings
 from logger_config import setup_logging
-from db import read_sql, df_to_sql
+from db import read_sql, df_to_sql, warmup
 
 warnings.filterwarnings('ignore')
 logger = setup_logging()
+
+
+warmup()  # Будим БД
 
 # ============================================
 # 1. ЗАГРУЖАЕМ СУЩЕСТВУЮЩИЕ ГОРОДА ИЗ БД

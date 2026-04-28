@@ -16,10 +16,9 @@
 import pandas as pd
 import traceback
 from logger_config import setup_logging
-from db import read_sql, df_to_sql, execute_sql, get_engine
+from db import read_sql, df_to_sql, execute_sql
 
 logger = setup_logging()
-engine = get_engine()
 
 # Константа для имени временной таблицы
 TEMP_TABLE_NAME = 'temp_codes_update'
@@ -161,8 +160,11 @@ def main():
     # 9. Массовое обновление через временную таблицу
     if not df_to_update.empty:
         # Загружаем данные во временную таблицу
-        df_to_update[['id', 'gibdd_region_id', 'gibdd_codes']].to_sql(
-            TEMP_TABLE_NAME, engine, if_exists='replace', index=False
+        df_to_sql(
+            df_to_update[['id', 'gibdd_region_id', 'gibdd_codes']],
+            TEMP_TABLE_NAME,
+            if_exists='replace',
+            chunksize=500
         )
 
         # Выполняем массовое обновление

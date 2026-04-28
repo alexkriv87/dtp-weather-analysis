@@ -1,6 +1,7 @@
 # db.py
 
 import os
+import time
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 import pandas as pd
@@ -21,9 +22,31 @@ DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NA
 engine = create_engine(DATABASE_URL)
 
 
-def get_engine():
-    """Возвращает объект подключения к БД"""
-    return engine
+# ============================================
+# ПРОВЕРКА ПОДКЛЮЧЕНИЯ (ПРОБУЖДЕНИЕ БД)
+# ============================================
+
+def warmup(retries=10, delay=2):
+    """
+    Проверяет подключение к БД, при ошибке пробуёт ещё раз.
+    Если после всех попыток подключиться не удалось — завершает программу.
+    """
+    for attempt in range(retries):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            print("БД активна")
+            return True
+        except Exception as e:
+            if attempt == retries - 1:
+                print(
+                    f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось подключиться к БД после {retries} попыток.")
+                print(f"Последняя ошибка: {e}")
+                # Здесь потом отправим сообщение в Telegram
+                import sys
+                sys.exit(1)
+            print(f"Попытка {attempt+1} не удалась, ждём {delay}с...")
+            time.sleep(delay)
 
 # ============================================
 # ЗАГРУЗКА ДАННЫХ ИЗ DATAFRAME В ТАБЛИЦУ

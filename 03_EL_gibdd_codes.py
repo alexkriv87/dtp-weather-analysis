@@ -13,11 +13,10 @@ import json
 import time
 from datetime import datetime
 from logger_config import setup_logging
-from db import df_to_sql, read_sql, execute_sql, get_engine
+from db import df_to_sql, read_sql, execute_sql
 import pandas as pd
 
 logger = setup_logging()
-engine = get_engine()
 
 
 def get_regions(year, month):

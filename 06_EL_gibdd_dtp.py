@@ -15,11 +15,10 @@ import sys
 import pandas as pd
 from datetime import datetime
 from logger_config import setup_logging
-from db import read_sql, df_to_sql, get_engine
+from db import read_sql, df_to_sql
 from config import CITIES, START_DATE
 
 logger = setup_logging()
-engine = get_engine()
 
 
 # ============================================

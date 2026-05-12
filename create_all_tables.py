@@ -346,10 +346,10 @@ def main():
     logger.info("=" * 60)
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.critical(f"Ошибка: {e}")
-        import traceback
-        logger.critical(traceback.format_exc())
+
+try:
+	main()
+except Exception as e:
+	logger.critical(f"Ошибка: {e}")
+	import traceback
+	logger.critical(traceback.format_exc())

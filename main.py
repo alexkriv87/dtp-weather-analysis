@@ -13,7 +13,7 @@ scripts = [
     '05_EL_weather_openmeteo.py',
     '06_EL_gibdd_dtp.py',
     '07_T_weather_clean.py',
-    # '08_T_gibdd_normalize.py',  # временно отключён
+    '08_T_gibdd_normalize.py',  # временно отключён
 ]
 
 for script in scripts:

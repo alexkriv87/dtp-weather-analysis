@@ -5,6 +5,5 @@ __pycache__/
 data/
 *.log
 tempCodeRunnerFile.py
-Test.ipynb
 create_tables.sql
 tempCodeRunnerFile.python

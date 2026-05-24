@@ -2,6 +2,7 @@
 """
 Гибкий скрипт для создания таблиц на Timeweb.
 Можно закомментировать ненужные секции.
+Версия с правильной структурой ДТП-таблиц (kart_id + district_id)
 """
 
 from db import execute_sql
@@ -183,7 +184,7 @@ def create_weather_clean():
         "CREATE INDEX IF NOT EXISTS idx_weather_clean_city_time ON weather_clean (city_id, time_utc)")
 
 # ============================================
-# 3. ЧИСТОВЫЕ ТАБЛИЦЫ ДТП (5 таблиц)
+# 3. ЧИСТОВЫЕ ТАБЛИЦЫ ДТП (5 таблиц) — НОВАЯ СТРУКТУРА
 # ============================================
 
 
@@ -193,7 +194,7 @@ def create_gibdd_dtp_main():
         CREATE TABLE IF NOT EXISTS gibdd_dtp_main (
             id SERIAL PRIMARY KEY,
             buffer_id INTEGER,
-            kart_id BIGINT NOT NULL,
+            kart_id TEXT NOT NULL,
             district_id TEXT NOT NULL,
             city_id INTEGER,
             date DATE,
@@ -221,7 +222,9 @@ def create_gibdd_dtp_place():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_dtp_place (
             id SERIAL PRIMARY KEY,
-            dtp_id INTEGER NOT NULL REFERENCES gibdd_dtp_main(id) ON DELETE CASCADE,
+            kart_id TEXT NOT NULL,
+            district_id TEXT NOT NULL,
+            city_id INTEGER,
             locality TEXT,
             street TEXT,
             house TEXT,
@@ -233,7 +236,9 @@ def create_gibdd_dtp_place():
             longitude NUMERIC,
             road_disadvantages TEXT[],
             location_scheme TEXT[],
-            nearby_objects TEXT[]
+            nearby_objects TEXT[],
+            buffer_id INTEGER,
+            FOREIGN KEY (kart_id, district_id) REFERENCES gibdd_dtp_main(kart_id, district_id)
         )
     """)
 
@@ -243,7 +248,9 @@ def create_gibdd_vehicles():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_vehicles (
             id SERIAL PRIMARY KEY,
-            dtp_id INTEGER NOT NULL REFERENCES gibdd_dtp_main(id) ON DELETE CASCADE,
+            kart_id TEXT NOT NULL,
+            district_id TEXT NOT NULL,
+            city_id INTEGER,
             vehicle_number TEXT,
             vehicle_status TEXT,
             vehicle_type TEXT,
@@ -255,11 +262,13 @@ def create_gibdd_vehicles():
             has_trailer TEXT,
             tech_condition TEXT,
             ownership TEXT,
-            owner_type TEXT
+            owner_type TEXT,
+            buffer_id INTEGER,
+            FOREIGN KEY (kart_id, district_id) REFERENCES gibdd_dtp_main(kart_id, district_id)
         )
     """)
     execute_sql(
-        "CREATE INDEX IF NOT EXISTS idx_gibdd_vehicles_dtp_id ON gibdd_vehicles(dtp_id)")
+        "CREATE INDEX IF NOT EXISTS idx_gibdd_vehicles_dtp_id ON gibdd_vehicles(kart_id, district_id)")
 
 
 def create_gibdd_participants_veh():
@@ -267,8 +276,9 @@ def create_gibdd_participants_veh():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_participants_veh (
             id SERIAL PRIMARY KEY,
-            dtp_id INTEGER NOT NULL REFERENCES gibdd_dtp_main(id) ON DELETE CASCADE,
-            vehicle_id INTEGER REFERENCES gibdd_vehicles(id) ON DELETE CASCADE,
+            kart_id TEXT NOT NULL,
+            district_id TEXT NOT NULL,
+            city_id INTEGER,
             role TEXT,
             condition TEXT,
             gender TEXT,
@@ -280,11 +290,13 @@ def create_gibdd_participants_veh():
             seat_group TEXT,
             injured_card_id TEXT,
             violations TEXT[],
-            other_violations TEXT[]
+            other_violations TEXT[],
+            buffer_id INTEGER,
+            FOREIGN KEY (kart_id, district_id) REFERENCES gibdd_dtp_main(kart_id, district_id)
         )
     """)
     execute_sql(
-        "CREATE INDEX IF NOT EXISTS idx_gibdd_participants_veh_dtp_id ON gibdd_participants_veh(dtp_id)")
+        "CREATE INDEX IF NOT EXISTS idx_gibdd_participants_veh_dtp_id ON gibdd_participants_veh(kart_id, district_id)")
 
 
 def create_gibdd_participants_other():
@@ -292,7 +304,9 @@ def create_gibdd_participants_other():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_participants_other (
             id SERIAL PRIMARY KEY,
-            dtp_id INTEGER NOT NULL REFERENCES gibdd_dtp_main(id) ON DELETE CASCADE,
+            kart_id TEXT NOT NULL,
+            district_id TEXT NOT NULL,
+            city_id INTEGER,
             role TEXT,
             condition TEXT,
             gender TEXT,
@@ -300,16 +314,18 @@ def create_gibdd_participants_other():
             leaving TEXT,
             participant_number TEXT,
             violations TEXT[],
-            other_violations TEXT[]
+            other_violations TEXT[],
+            buffer_id INTEGER,
+            FOREIGN KEY (kart_id, district_id) REFERENCES gibdd_dtp_main(kart_id, district_id)
         )
     """)
     execute_sql(
-        "CREATE INDEX IF NOT EXISTS idx_gibdd_participants_other_dtp_id ON gibdd_participants_other(dtp_id)")
-
+        "CREATE INDEX IF NOT EXISTS idx_gibdd_participants_other_dtp_id ON gibdd_participants_other(kart_id, district_id)")
 
 # ============================================
 # MAIN — ЗДЕСЬ ВЫБИРАЕШЬ, ЧТО СОЗДАВАТЬ
 # ============================================
+
 
 def main():
     logger.info("=" * 60)
@@ -333,7 +349,7 @@ def main():
     create_weather_clean()
 
     # ============================================
-    # 3. Чистовые ДТП (5 таблиц)
+    # 3. Чистовые ДТП (5 таблиц) — новая структура
     # ============================================
     create_gibdd_dtp_main()
     create_gibdd_dtp_place()
@@ -346,10 +362,9 @@ def main():
     logger.info("=" * 60)
 
 
-
 try:
-	main()
+    main()
 except Exception as e:
-	logger.critical(f"Ошибка: {e}")
-	import traceback
-	logger.critical(traceback.format_exc())
+    logger.critical(f"Ошибка: {e}")
+    import traceback
+    logger.critical(traceback.format_exc())

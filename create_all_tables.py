@@ -2,7 +2,7 @@
 """
 Гибкий скрипт для создания таблиц на Timeweb.
 Можно закомментировать ненужные секции.
-Версия с правильной структурой ДТП-таблиц (kart_id + district_id)
+Версия с правильной структурой ДТП-таблиц (kart_id BIGINT + district_id)
 """
 
 from db import execute_sql
@@ -103,7 +103,7 @@ def create_gibdd_dtp_buffer():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_dtp_buffer (
             id BIGSERIAL PRIMARY KEY,
-            kart_id TEXT NOT NULL,
+            kart_id BIGINT NOT NULL,
             district_id TEXT NOT NULL,
             city TEXT,
             city_id INTEGER,
@@ -194,7 +194,7 @@ def create_gibdd_dtp_main():
         CREATE TABLE IF NOT EXISTS gibdd_dtp_main (
             id SERIAL PRIMARY KEY,
             buffer_id INTEGER,
-            kart_id TEXT NOT NULL,
+            kart_id BIGINT NOT NULL,
             district_id TEXT NOT NULL,
             city_id INTEGER,
             date DATE,
@@ -222,7 +222,7 @@ def create_gibdd_dtp_place():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_dtp_place (
             id SERIAL PRIMARY KEY,
-            kart_id TEXT NOT NULL,
+            kart_id BIGINT NOT NULL,
             district_id TEXT NOT NULL,
             city_id INTEGER,
             locality TEXT,
@@ -248,7 +248,7 @@ def create_gibdd_vehicles():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_vehicles (
             id SERIAL PRIMARY KEY,
-            kart_id TEXT NOT NULL,
+            kart_id BIGINT NOT NULL,
             district_id TEXT NOT NULL,
             city_id INTEGER,
             vehicle_number TEXT,
@@ -276,7 +276,7 @@ def create_gibdd_participants_veh():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_participants_veh (
             id SERIAL PRIMARY KEY,
-            kart_id TEXT NOT NULL,
+            kart_id BIGINT NOT NULL,
             district_id TEXT NOT NULL,
             city_id INTEGER,
             role TEXT,
@@ -304,7 +304,7 @@ def create_gibdd_participants_other():
     execute_sql("""
         CREATE TABLE IF NOT EXISTS gibdd_participants_other (
             id SERIAL PRIMARY KEY,
-            kart_id TEXT NOT NULL,
+            kart_id BIGINT NOT NULL,
             district_id TEXT NOT NULL,
             city_id INTEGER,
             role TEXT,
@@ -332,7 +332,6 @@ def main():
     logger.info("СОЗДАНИЕ ТАБЛИЦ НА TIMEWEB")
     logger.info("=" * 60)
 
-    # ЗАКОММЕНТИРУЙ ТО, ЧТО НЕ НУЖНО
     # ============================================
     # 1. Буферные таблицы
     # ============================================

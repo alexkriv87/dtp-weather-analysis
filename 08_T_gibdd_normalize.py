@@ -1,12 +1,11 @@
 """
-Нормализация ДТП из буфера в чистовые таблицы (Timeweb версия).
-Без Supabase, только SQLAlchemy + pandas.
+Нормализация ДТП из буфера в чистовые таблицы 
 """
 
 import json
 import pandas as pd
 from logger_config import setup_logging
-from db import read_sql, df_to_sql, execute_sql, engine
+from db import read_sql, df_to_sql
 from config import CITIES
 
 logger = setup_logging()
@@ -121,248 +120,241 @@ df_vehicles = pd.concat(veh_dfs, ignore_index=True)
 # 6. РАЗВОРОТ УЧАСТНИКОВ (explode + json_normalize)
 # ============================================
 
-def expand_participants_fast(source_df, source_col, target_df_name):
-    if source_df.empty or source_col not in source_df.columns:
-        logger.warning(f"Нет данных для разворота участников {target_df_name}")
-        return pd.DataFrame()
-
-    s = source_df.explode(source_col).reset_index(drop=True)
-    uch_info = pd.json_normalize(s[source_col])
-
-    if target_df_name == "ТС":
-        keys_df = s[['kart_id', 'district_id', 'city_id', 'buffer_id']]
-        uch_info['vehicle_record_id'] = s.index
-    else:
-        keys_df = s[['KartId', 'district_id', 'city_id', 'buffer_id']]
-        uch_info.rename(columns={'KartId': 'kart_id'}, inplace=True)
-
-    df_participants = pd.concat([keys_df, uch_info], axis=1)
-    logger.info(
-        f"Развернуто участников {target_df_name}: {len(df_participants)}")
-    return df_participants
-
-
-df_participants_veh = expand_participants_fast(df_vehicles, "ts_uch", "ТС")
-df_participants_other = expand_participants_fast(
-    df_flat, "infoDtp.uchInfo", "Прочие")
-
-
 # ============================================
-# 7. УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ В БД
+# 6.1. РАЗВОРОТ УЧАСТНИКОВ ТРАНСПОРТНЫХ СРЕДСТВ (ts_uch)
 # ============================================
 
-def prepare_and_save(df, table_name, column_map, required_columns, preprocess_func=None):
+def expand_ts_uch(df_vehicles):
     """
-    Универсальная подготовка и вставка данных в БД.
+    Разворачивает участников из колонки ts_uch в отдельные строки.
+    Каждый участник получает поля из своего ТС.
     """
-    # 1. Переименовываем колонки по словарю
-    df_renamed = df.rename(columns=column_map, errors='ignore')
+    rows = []
+    for _, veh in df_vehicles.iterrows():
+        for uch in veh['ts_uch']:
+            # Копируем словарь участника
+            row = uch.copy()
+            # Добавляем поля из ТС
+            row['kart_id'] = veh['kart_id']
+            row['district_id'] = veh['district_id']
+            row['city_id'] = veh['city_id']
+            row['buffer_id'] = veh['buffer_id']
+            row['n_ts'] = veh['n_ts']
+            row['ts_s'] = veh['ts_s']
+            row['t_ts'] = veh['t_ts']
+            row['marka_ts'] = veh['marka_ts']
+            row['m_ts'] = veh['m_ts']
+            row['color'] = veh['color']
+            row['r_rul'] = veh['r_rul']
+            row['g_v'] = veh['g_v']
+            rows.append(row)
 
-    # 2. Выполняем специфическую предобработку (если передана)
-    if preprocess_func:
-        df_renamed = preprocess_func(df_renamed)
-
-    # 3. Оставляем только нужные колонки
-    cols_exist = [col for col in required_columns if col in df_renamed.columns]
-    df_ready = df_renamed[cols_exist].copy()
-
-    # 4. Вставляем в БД
-    try:
-        df_to_sql(df_ready, table_name, if_exists='append', chunksize=500)
-        logger.info(f"Вставлено {len(df_ready)} записей в {table_name}")
-    except Exception as e:
-        logger.error(f"Ошибка при вставке в {table_name}: {e}")
-
-
-# ============================================
-# 8. ПРЕДОБРАБОТЧИКИ ДЛЯ КАЖДОЙ ТАБЛИЦЫ
-# ============================================
-
-def preprocess_main(df):
-    """Преобразование типов для main"""
-    df['kart_id'] = df['kart_id'].astype(str)
-    df['date'] = pd.to_datetime(df['date'], format='%d.%m.%Y', errors='coerce')
-    df['time'] = pd.to_datetime(
-        df['time'], format='%H:%M', errors='coerce').dt.time
-    df['fatalities'] = pd.to_numeric(
-        df['fatalities'], errors='coerce').fillna(0).astype(int)
-    df['injured'] = pd.to_numeric(
-        df['injured'], errors='coerce').fillna(0).astype(int)
-    df['vehicles_count'] = pd.to_numeric(
-        df['vehicles_count'], errors='coerce').fillna(0).astype(int)
-    df['participants_count'] = pd.to_numeric(
-        df['participants_count'], errors='coerce').fillna(0).astype(int)
-    return df
+    return pd.DataFrame(rows)
 
 
-def preprocess_place(df):
-    """Удаляем дублирующую колонку locality (District)"""
-    return df.drop(columns=['District'], errors='ignore')
-
-
-def preprocess_vehicles(df):
-    """Замена пустых строк на None в числовых полях"""
-    df['year'] = df['year'].replace('', None)
-    return df
-
-
-def preprocess_participants_veh(df):
-    """Замена пустых строк на None в числовых полях"""
-    if 'driving_experience' in df.columns:
-        df['driving_experience'] = df['driving_experience'].replace('', None)
-    return df
+df_participants_veh = expand_ts_uch(df_vehicles)
+logger.info(f"Участников в ТС: {len(df_participants_veh)}")
 
 
 # ============================================
-# 9. ВСТАВКА ДАННЫХ В БД
+# 6.2. РАЗВОРОТ ПРОЧИХ УЧАСТНИКОВ (uchInfo)
+# ============================================
+
+def expand_uch_info(df_flat):
+    """
+    Разворачивает пешеходов и прочих участников из колонки infoDtp.uchInfo.
+    Каждый участник получает поля из ДТП.
+    """
+    rows = []
+    for _, row in df_flat.iterrows():
+        for uch in row['infoDtp.uchInfo']:
+            # Копируем словарь участника
+            record = uch.copy()
+            # Добавляем поля из ДТП
+            record['kart_id'] = row['KartId']
+            record['district_id'] = row['district_id']
+            record['city_id'] = row['city_id']
+            record['buffer_id'] = row['buffer_id']
+            rows.append(record)
+
+    return pd.DataFrame(rows)
+
+
+df_participants_other = expand_uch_info(df_flat)
+logger.info(f"Пешеходов/прочих: {len(df_participants_other)}")
+
+
+# ============================================
+# 7. ВСТАВКА ДАННЫХ В БД
 # ============================================
 
 logger.info("=" * 60)
 logger.info("ВСТАВКА ДАННЫХ В ТАБЛИЦЫ")
 logger.info("=" * 60)
 
-# 9.1. Основная таблица ДТП
-prepare_and_save(
-    df=df_main,
-    table_name='gibdd_dtp_main',
-    column_map={
-        'KartId': 'kart_id',
-        'date': 'date',
-        'Time': 'time',
-        'DTP_V': 'dtp_type',
-        'POG': 'fatalities',
-        'RAN': 'injured',
-        'K_TS': 'vehicles_count',
-        'K_UCH': 'participants_count',
-        'emtp_number': 'emtp_number',
-        'buffer_id': 'buffer_id',
-        'city_id': 'city_id',
-        'district_id': 'district_id'
-    },
-    required_columns=[
-        'kart_id', 'district_id', 'city_id', 'date', 'time', 'dtp_type',
-        'fatalities', 'injured', 'vehicles_count', 'participants_count',
-        'emtp_number', 'buffer_id'
-    ],
-    preprocess_func=preprocess_main
-)
 
-# 9.2. Место ДТП
-prepare_and_save(
-    df=df_place,
-    table_name='gibdd_dtp_place',
-    column_map={
-        'KartId': 'kart_id',
-        'District': 'locality_tmp',      # временно, чтобы не конфликтовать
-        'infoDtp.n_p': 'locality',
-        'infoDtp.street': 'street',
-        'infoDtp.house': 'house',
-        'infoDtp.k_ul': 'road_category',
-        'infoDtp.s_pog': 'weather',
-        'infoDtp.s_pch': 'road_condition',
-        'infoDtp.osv': 'light',
-        'infoDtp.COORD_W': 'latitude',
-        'infoDtp.COORD_L': 'longitude',
-        'infoDtp.ndu': 'road_disadvantages',
-        'infoDtp.sdor': 'location_scheme',
-        'infoDtp.OBJ_DTP': 'nearby_objects',
-        'buffer_id': 'buffer_id',
-        'city_id': 'city_id',
-        'district_id': 'district_id'
-    },
-    required_columns=[
-        'kart_id', 'district_id', 'city_id', 'locality', 'street', 'house',
-        'road_category', 'weather', 'road_condition', 'light',
-        'latitude', 'longitude', 'road_disadvantages', 'location_scheme',
-        'nearby_objects', 'buffer_id'
-    ],
-    preprocess_func=preprocess_place
-)
+# ------------------------------------------------------------
+# 7.1. Таблица gibdd_dtp_main
+# ------------------------------------------------------------
 
-# 9.3. Транспортные средства
-prepare_and_save(
-    df=df_vehicles,
-    table_name='gibdd_vehicles',
-    column_map={
-        'n_ts': 'vehicle_number',
-        'ts_s': 'vehicle_status',
-        't_ts': 'vehicle_type',
-        'marka_ts': 'brand',
-        'm_ts': 'model',
-        'r_rul': 'drive_type',
-        'g_v': 'year',
-        'm_pov': 'has_trailer',
-        't_n': 'tech_condition',
-        'f_sob': 'ownership',
-        'o_pf': 'owner_type',
-        'buffer_id': 'buffer_id',
-        'city_id': 'city_id',
-        'district_id': 'district_id',
-        'kart_id': 'kart_id'
-    },
-    required_columns=[
-        'kart_id', 'district_id', 'city_id', 'vehicle_number', 'vehicle_status',
-        'vehicle_type', 'brand', 'model', 'color', 'drive_type', 'year',
-        'has_trailer', 'tech_condition', 'ownership', 'owner_type', 'buffer_id'
-    ],
-    preprocess_func=preprocess_vehicles
-)
+df_main = df_main.rename(columns={
+    'KartId': 'kart_id',
+    'Time': 'time',
+    'DTP_V': 'dtp_type',
+    'POG': 'fatalities',
+    'RAN': 'injured',
+    'K_TS': 'vehicles_count',
+    'K_UCH': 'participants_count'
+})
 
-# 9.4. Участники в ТС
-prepare_and_save(
-    df=df_participants_veh,
-    table_name='gibdd_participants_veh',
-    column_map={
-        'K_UCH': 'role',
-        'S_T': 'condition',
-        'POL': 'gender',
-        'V_ST': 'driving_experience',
-        'ALCO': 'alcohol',
-        'SAFETY_BELT': 'seat_belt',
-        'S_SM': 'leaving',
-        'N_UCH': 'participant_number',
-        'S_SEAT_GROUP': 'seat_group',
-        'INJURED_CARD_ID': 'injured_card_id',
-        'NPDD': 'violations',
-        'SOP_NPDD': 'other_violations',
-        'buffer_id': 'buffer_id',
-        'city_id': 'city_id',
-        'district_id': 'district_id',
-        'kart_id': 'kart_id'
-    },
-    required_columns=[
-        'kart_id', 'district_id', 'city_id', 'role', 'condition',
-        'gender', 'driving_experience', 'alcohol', 'seat_belt',
-        'leaving', 'participant_number', 'seat_group', 'injured_card_id',
-        'violations', 'other_violations', 'buffer_id'
-    ],
-    preprocess_func=preprocess_participants_veh
-)
+df_main['date'] = pd.to_datetime(
+    df_main['date'], format='%d.%m.%Y', errors='coerce')
+df_main['time'] = pd.to_datetime(
+    df_main['time'], format='%H:%M', errors='coerce').dt.time
+df_main['fatalities'] = pd.to_numeric(
+    df_main['fatalities'], errors='coerce').fillna(0).astype(int)
+df_main['injured'] = pd.to_numeric(
+    df_main['injured'], errors='coerce').fillna(0).astype(int)
+df_main['vehicles_count'] = pd.to_numeric(
+    df_main['vehicles_count'], errors='coerce').fillna(0).astype(int)
+df_main['participants_count'] = pd.to_numeric(
+    df_main['participants_count'], errors='coerce').fillna(0).astype(int)
 
-# 9.5. Прочие участники
-prepare_and_save(
-    df=df_participants_other,
-    table_name='gibdd_participants_other',
-    column_map={
-        'KartId': 'kart_id',
-        'K_UCH': 'role',
-        'S_T': 'condition',
-        'POL': 'gender',
-        'ALCO': 'alcohol',
-        'S_SM': 'leaving',
-        'N_UCH': 'participant_number',
-        'NPDD': 'violations',
-        'SOP_NPDD': 'other_violations',
-        'buffer_id': 'buffer_id',
-        'city_id': 'city_id',
-        'district_id': 'district_id'
-    },
-    required_columns=[
-        'kart_id', 'district_id', 'city_id', 'role', 'condition',
-        'gender', 'alcohol', 'leaving', 'participant_number',
-        'violations', 'other_violations', 'buffer_id'
-    ]
-)
+main_cols = ['kart_id', 'district_id', 'city_id', 'date', 'time', 'dtp_type',
+             'fatalities', 'injured', 'vehicles_count', 'participants_count',
+             'emtp_number', 'buffer_id']
+df_main = df_main[main_cols]
+
+df_to_sql(df_main, 'gibdd_dtp_main', if_exists='append', chunksize=500)
+logger.info(f"Вставлено {len(df_main)} записей в gibdd_dtp_main")
+
+
+# ------------------------------------------------------------
+# 7.2. Таблица gibdd_dtp_place
+# ------------------------------------------------------------
+
+df_place = df_place.rename(columns={
+    'KartId': 'kart_id',
+    'infoDtp.n_p': 'locality',
+    'infoDtp.street': 'street',
+    'infoDtp.house': 'house',
+    'infoDtp.k_ul': 'road_category',
+    'infoDtp.s_pog': 'weather',
+    'infoDtp.s_pch': 'road_condition',
+    'infoDtp.osv': 'light',
+    'infoDtp.COORD_W': 'latitude',
+    'infoDtp.COORD_L': 'longitude',
+    'infoDtp.ndu': 'road_disadvantages',
+    'infoDtp.sdor': 'location_scheme',
+    'infoDtp.OBJ_DTP': 'nearby_objects'
+})
+
+if 'District' in df_place.columns:
+    df_place = df_place.drop(columns=['District'])
+
+place_cols = ['kart_id', 'district_id', 'city_id', 'locality', 'street', 'house',
+              'road_category', 'weather', 'road_condition', 'light',
+              'latitude', 'longitude', 'road_disadvantages', 'location_scheme',
+              'nearby_objects', 'buffer_id']
+df_place = df_place[place_cols]
+
+df_to_sql(df_place, 'gibdd_dtp_place', if_exists='append', chunksize=500)
+logger.info(f"Вставлено {len(df_place)} записей в gibdd_dtp_place")
+
+
+# ------------------------------------------------------------
+# 7.3. Таблица gibdd_vehicles
+# ------------------------------------------------------------
+
+df_vehicles = df_vehicles.rename(columns={
+    'n_ts': 'vehicle_number',
+    'ts_s': 'vehicle_status',
+    't_ts': 'vehicle_type',
+    'marka_ts': 'brand',
+    'm_ts': 'model',
+    'r_rul': 'drive_type',
+    'g_v': 'year',
+    'm_pov': 'has_trailer',
+    't_n': 'tech_condition',
+    'f_sob': 'ownership',
+    'o_pf': 'owner_type'
+})
+
+df_vehicles['year'] = df_vehicles['year'].replace('', None)
+
+vehicles_cols = ['kart_id', 'district_id', 'city_id', 'vehicle_number', 'vehicle_status',
+                 'vehicle_type', 'brand', 'model', 'color', 'drive_type', 'year',
+                 'has_trailer', 'tech_condition', 'ownership', 'owner_type', 'buffer_id']
+df_vehicles = df_vehicles[vehicles_cols]
+
+df_to_sql(df_vehicles, 'gibdd_vehicles', if_exists='append', chunksize=500)
+logger.info(f"Вставлено {len(df_vehicles)} записей в gibdd_vehicles")
+
+
+# ------------------------------------------------------------
+# 7.4. Таблица gibdd_participants_veh
+# ------------------------------------------------------------
+
+df_participants_veh = df_participants_veh.rename(columns={
+    'K_UCH': 'role',
+    'S_T': 'condition',
+    'POL': 'gender',
+    'V_ST': 'driving_experience',
+    'ALCO': 'alcohol',
+    'SAFETY_BELT': 'seat_belt',
+    'S_SM': 'leaving',
+    'N_UCH': 'participant_number',
+    'S_SEAT_GROUP': 'seat_group',
+    'INJURED_CARD_ID': 'injured_card_id',
+    'NPDD': 'violations',
+    'SOP_NPDD': 'other_violations'
+})
+
+if 'driving_experience' in df_participants_veh.columns:
+    df_participants_veh['driving_experience'] = df_participants_veh['driving_experience'].replace(
+        '', None)
+
+part_veh_cols = ['kart_id', 'district_id', 'city_id', 'role', 'condition', 'gender',
+                 'driving_experience', 'alcohol', 'seat_belt', 'leaving', 'participant_number',
+                 'seat_group', 'injured_card_id', 'violations', 'other_violations', 'buffer_id']
+part_veh_cols_exist = [
+    col for col in part_veh_cols if col in df_participants_veh.columns]
+df_participants_veh = df_participants_veh[part_veh_cols_exist]
+
+df_to_sql(df_participants_veh, 'gibdd_participants_veh',
+          if_exists='append', chunksize=500)
+logger.info(
+    f"Вставлено {len(df_participants_veh)} записей в gibdd_participants_veh")
+
+
+# ------------------------------------------------------------
+# 7.5. Таблица gibdd_participants_other
+# ------------------------------------------------------------
+
+df_participants_other = df_participants_other.rename(columns={
+    'KartId': 'kart_id',
+    'K_UCH': 'role',
+    'S_T': 'condition',
+    'POL': 'gender',
+    'ALCO': 'alcohol',
+    'S_SM': 'leaving',
+    'N_UCH': 'participant_number',
+    'NPDD': 'violations',
+    'SOP_NPDD': 'other_violations'
+})
+
+part_other_cols = ['kart_id', 'district_id', 'city_id', 'role', 'condition', 'gender',
+                   'alcohol', 'leaving', 'participant_number', 'violations',
+                   'other_violations', 'buffer_id']
+part_other_cols_exist = [
+    col for col in part_other_cols if col in df_participants_other.columns]
+df_participants_other = df_participants_other[part_other_cols_exist]
+
+df_to_sql(df_participants_other, 'gibdd_participants_other',
+          if_exists='append', chunksize=500)
+logger.info(
+    f"Вставлено {len(df_participants_other)} записей в gibdd_participants_other")
+
 
 logger.info("=" * 60)
 logger.info("НОРМАЛИЗАЦИЯ ДТП ЗАВЕРШЕНА УСПЕШНО")
